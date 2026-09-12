@@ -1,7 +1,7 @@
 FROM python:3.12-slim-bookworm
 ARG CLAUDE_VERSION=2.1.269
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates curl git ripgrep libatomic1 \
+    ca-certificates curl git ripgrep libatomic1 procps \
     && rm -rf /var/lib/apt/lists/*
 RUN curl --fail --silent --show-error --location https://claude.ai/install.sh -o /tmp/install-claude.sh \
     && bash /tmp/install-claude.sh "${CLAUDE_VERSION}" \

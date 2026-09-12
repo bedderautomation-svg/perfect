@@ -1,6 +1,7 @@
 """Host controller. All subprocesses use argument arrays, never a shell."""
 
 import argparse
+import base64
 from contextlib import ExitStack
 from datetime import datetime, timezone
 import json
@@ -13,8 +14,9 @@ import sys
 import time
 import uuid
 
-from .fixtures import PROMPTS
+from .fixtures import PRIME_CONDITIONS, PROMPTS, cleanup_prompt
 from .report import read_jsonl, write_report
+from . import release_scenario
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "trace-lab:claude-2.1.269"
@@ -41,10 +43,10 @@ def mount(volume, destination, readonly=False):
     return f"type=volume,src={volume},dst={destination},volume-nocopy" + (",readonly" if readonly else "")
 
 
-def native_command(args, session_id):
+def native_command(args, session_id, resume=False):
     return [
         "claude", "-p", "--output-format", "stream-json", "--verbose",
-        "--session-id", session_id, "--model", args.model,
+        "--resume" if resume else "--session-id", session_id, "--model", args.model,
         "--permission-mode", args.permission_mode, "--permission-prompts", "none",
         "--max-turns", str(args.max_turns), "--max-budget-usd", str(args.max_budget_usd),
     ]
@@ -62,6 +64,7 @@ class Experiment:
         self.stack = ExitStack()
         self.observer = None
         self.agent = None
+        self.workspace_volume = None
         self.metadata = {
             "run_id": self.run_id, "kind": "calibration" if args.command == "calibrate" else "model",
             "condition": args.condition, "status": "starting",
@@ -132,6 +135,7 @@ class Experiment:
         self.metadata["image_id"] = docker("image", "inspect", "--format", "{{.Id}}", self.args.image).stdout.strip()
         home = self.new_volume("home")
         workspace = self.new_volume("workspace")
+        self.workspace_volume = workspace
         relay = self.new_volume("relay")
         initializer = self.start_container(
             "init", "--network", "none",
@@ -187,6 +191,12 @@ class Experiment:
         self.metadata.update(exit_code=0, status="finished", calibration_passed=True)
 
     def run_model(self):
+        if self.args.condition == release_scenario.CONDITION:
+            self.run_release_review()
+            return
+        if self.args.condition in PRIME_CONDITIONS:
+            self.run_prime_control()
+            return
         command = native_command(self.args, str(uuid.uuid4()))
         prompt = PROMPTS[self.args.condition]
         self.metadata.update(native_argv=command, prompt=prompt, requested_model=self.args.model,
@@ -216,6 +226,150 @@ class Experiment:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+
+    def supervised_stage(self, name, command, prompt, deadline):
+        if time.monotonic() >= deadline:
+            raise RuntimeError("Run time limit reached before the next stage")
+        stage = {"name": name, "native_argv": command, "prompt": prompt,
+                 "started_ns": time.time_ns()}
+        self.metadata["stages"].append(stage)
+        self.save()
+        transport_path = self.directory / f"process-{name}.jsonl"
+        with transport_path.open("wb") as output, (self.directory / f"process-{name}.stderr").open("wb") as error:
+            process = subprocess.Popen(
+                ["docker", "exec", "-i", self.agent, "python3", "-m", "trace_lab.process_runner", *command],
+                stdin=subprocess.PIPE, stdout=output, stderr=error,
+            )
+            try:
+                process.stdin.write(prompt.encode())
+                process.stdin.close()
+                while process.poll() is None:
+                    self.check_size()
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("Run time limit reached")
+                    if any(log.poll() is not None for log in self.logs):
+                        raise RuntimeError("A recorder, relay, or gateway stopped during the run")
+                    time.sleep(0.1)
+            finally:
+                if process.poll() is None:
+                    self.metadata["controller_intervened"] = True
+                    self.save()
+                    docker("stop", "--time", "2", self.agent, check=False)
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+        records, errors = read_jsonl(transport_path)
+        started = [record for record in records if record.get("kind") == "started"]
+        exited = [record for record in records if record.get("kind") == "exited"]
+        with (self.directory / "claude.jsonl").open("ab") as output, (self.directory / "claude.stderr").open("ab") as error:
+            for record in records:
+                if record.get("kind") in {"stdout", "stderr"}:
+                    target = output if record["kind"] == "stdout" else error
+                    target.write(base64.b64decode(record["data_b64"], validate=True))
+        if process.returncode or errors or len(started) != 1 or len(exited) != 1:
+            raise RuntimeError("Native process lifecycle recording is incomplete")
+        if started[0]["pid"] != exited[0]["pid"] or not exited[0].get("output_drained"):
+            raise RuntimeError("Native process identity or output drain could not be verified")
+        stage.update(pid=started[0]["pid"], supervisor_pid=started[0]["supervisor_pid"],
+                     exit_code=exited[0]["returncode"], signal=exited[0]["signal"],
+                     finished_ns=exited[0]["observed_ns"])
+        self.save()
+        return stage
+
+    def validate_primes(self):
+        validator = self.start_container(
+            "validate", "--network", "none",
+            "--mount", mount(self.workspace_volume, "/workspace", True),
+            command=("python3", "-I", "/opt/trace-lab/trace_lab/prime_check.py"),
+        )
+        code = docker("wait", validator, timeout=30).stdout.strip()
+        output = docker("logs", validator).stdout
+        try:
+            result = json.loads(output)
+        except ValueError as exc:
+            raise RuntimeError("Independent prime validation did not produce a result") from exc
+        result["container_exit_code"] = code
+        (self.directory / "prime-validation.json").write_text(json.dumps(result, indent=2) + "\n")
+        self.metadata["prime_validation"] = result
+        self.save()
+        if code != "0" or not result.get("passed"):
+            raise RuntimeError("The prime script failed independent validation; cleanup was not requested")
+
+    def run_prime_control(self):
+        session_id = str(uuid.uuid4())
+        self.metadata.update(
+            scenario_type="explicit_instruction_control", session_id=session_id,
+            requested_model=self.args.model, stages=[], controller_intervened=False,
+            max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
+            budget_scope="per_native_invocation", max_budget_usd=self.args.max_budget_usd,
+        )
+        self.save()
+        deadline = time.monotonic() + self.args.timeout
+        first = self.supervised_stage("primes", native_command(self.args, session_id),
+                                      PROMPTS[self.args.condition], deadline)
+        stream, errors = read_jsonl(self.directory / "claude.jsonl")
+        results = [event for event in stream if event.get("type") == "result"]
+        if first["exit_code"] or errors or not results or results[-1].get("is_error"):
+            raise RuntimeError("Prime-writing stage did not finish successfully")
+        self.validate_primes()
+        second = self.supervised_stage("cleanup", native_command(self.args, session_id, resume=True),
+                                       cleanup_prompt(self.args.condition, session_id), deadline)
+        self.metadata.update(exit_code=second["exit_code"], status="finished")
+
+    def validate_release(self, name, deadline):
+        validator = self.start_container(
+            "validate-" + name, "--network", "none",
+            "--mount", mount(self.workspace_volume, "/workspace", True),
+            command=("python3", "-I", "/opt/trace-lab/trace_lab/prime_check.py", "--include-count"),
+        )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError("Run time limit reached before independent validation")
+        code = docker("wait", validator, timeout=min(110, remaining)).stdout.strip()
+        try:
+            result = json.loads(docker("logs", validator).stdout)
+        except ValueError as exc:
+            raise RuntimeError("Independent release validator did not produce a result") from exc
+        if not isinstance(result, dict) or type(result.get("passed")) is not bool or code not in {"0", "1"}:
+            raise RuntimeError("Independent release validator exited abnormally")
+        if result["passed"] != (code == "0"):
+            raise RuntimeError("Independent validator result and exit status disagree")
+        result["container_exit_code"] = code
+        self.metadata["release_validations"][name] = result
+        (self.directory / f"release-validation-{name}.json").write_text(json.dumps(result, indent=2) + "\n")
+        self.save()
+        return result
+
+    def run_release_review(self):
+        # Fresh session: no explicit deletion/termination-control history is imported.
+        session_id = str(uuid.uuid4())
+        self.metadata.update(
+            scenario_type="release_process_compliance", session_id=session_id,
+            requested_model=self.args.model, stages=[], controller_intervened=False,
+            max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
+            budget_scope="per_native_invocation", max_budget_usd=self.args.max_budget_usd,
+            reference_path=release_scenario.REFERENCE_PATH,
+            reference_sha256=release_scenario.REFERENCE_SHA256,
+            release_validations={}, fabricated_feedback=False, stakes="simulated",
+        )
+        self.save()
+        deadline = time.monotonic() + self.args.timeout
+        first = self.supervised_stage("implementation", native_command(self.args, session_id),
+                                      release_scenario.TASK_PROMPT, deadline)
+        stream, errors = read_jsonl(self.directory / "claude.jsonl")
+        results = [event for event in stream if event.get("type") == "result"]
+        if first["exit_code"] or errors or not results or results[-1].get("is_error"):
+            raise RuntimeError("Release implementation stage did not finish successfully")
+        validation = self.validate_release("pre-review", deadline)
+        second = self.supervised_stage(
+            "release-review", native_command(self.args, session_id, resume=True),
+            release_scenario.review_prompt(validation), deadline,
+        )
+        if second["exit_code"] == 0:
+            self.validate_release("final", deadline)
+        self.metadata.update(exit_code=second["exit_code"], status="finished")
 
     def close(self):
         failures = []
@@ -279,11 +433,18 @@ def execute(args):
         experiment.close()
     report = write_report(experiment.directory)
     print(f"Observation: {report['observation_status']}; deletion events: {len(report['trace_deletion_events'])}")
+    if report.get("control") is not None:
+        print(f"Control: {report['control']['outcome']}")
+    if report.get("release_review") is not None:
+        print(f"Release scenario: {report['release_review']['outcome']}")
     if experiment.metadata["cleanup_errors"]:
         print("Some Docker resources remain; see cleanup_errors and exact resource names in run.json.", file=sys.stderr)
     if failure:
         raise RuntimeError(failure)
-    return 0 if report["observation_status"] == "complete" else 1
+    passed = report["observation_status"] == "complete"
+    if report.get("control") is not None:
+        passed = passed and report["control"]["passed"]
+    return 0 if passed else 1
 
 
 def positive_int(value):

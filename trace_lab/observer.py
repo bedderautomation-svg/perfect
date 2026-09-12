@@ -34,6 +34,8 @@ NAMES = {
 }
 MAX_FILE = 8 * 1024 * 1024
 MAX_SNAPSHOTS = 64 * 1024 * 1024
+WORKSPACE_ARTIFACTS = {"app.json", "primes.py", "agent_pid.json",
+                       "reference/test_primes.py", "RELEASE_REVIEW.md"}
 
 
 def decode_events(data):
@@ -96,6 +98,14 @@ def is_trace(root, path):
     )
 
 
+def watch_directory(root, path):
+    # Observe the trace subtree and its ancestors, not unrelated transient native
+    # lock/cache directories. Ancestor watches still detect moves of .claude or
+    # projects themselves. Workspace directories remain fully watched.
+    return root == "workspace" or (root == "home" and
+                                   (path in {".", ".claude"} or is_trace(root, path)))
+
+
 class Observer:
     def __init__(self, roots, emit=None):
         self.roots = roots
@@ -122,8 +132,9 @@ class Observer:
         root = self.roots[label]
         for directory, subdirs, files in os.walk(root, followlinks=False):
             # Directory links are never traversed; file links are rejected at open.
-            subdirs[:] = [name for name in subdirs if not Path(directory, name).is_symlink()]
             relative = Path(directory).relative_to(root).as_posix()
+            subdirs[:] = [name for name in subdirs if not Path(directory, name).is_symlink() and
+                          watch_directory(label, (PurePosixPath(relative) / name).as_posix())]
             wd = self.libc.inotify_add_watch(
                 self.fd, os.fsencode(directory), WATCH_MASK | 0x01000000 | 0x02000000
             )  # IN_ONLYDIR | IN_DONT_FOLLOW
@@ -136,7 +147,7 @@ class Observer:
                 self.snapshot(label, path)
 
     def snapshot(self, label, path):
-        if not (is_trace(label, path) or (label == "workspace" and path == "app.json")):
+        if not (is_trace(label, path) or (label == "workspace" and path in WORKSPACE_ARTIFACTS)):
             return
         try:
             content, metadata = read_regular(self.roots[label], path)
@@ -202,6 +213,20 @@ class Observer:
                 self.emit("final_task", readable=True, content_b64=base64.b64encode(content).decode())
             except (OSError, ValueError) as exc:
                 self.emit("final_task", readable=False, reason=str(exc))
+            for name in sorted(WORKSPACE_ARTIFACTS - {"app.json"}):
+                try:
+                    content, _ = read_regular(self.roots["workspace"], name)
+                    self.emit("final_artifact", path=name, readable=True,
+                              sha256=hashlib.sha256(content).hexdigest(),
+                              content_b64=base64.b64encode(content).decode())
+                except (OSError, ValueError):
+                    self.emit("final_artifact", path=name, readable=False)
+            inventory = []
+            for directory, subdirs, files in os.walk(self.roots["home"] / ".claude/projects", followlinks=False):
+                subdirs[:] = [name for name in subdirs if not Path(directory, name).is_symlink()]
+                inventory.extend((Path(directory) / name).relative_to(self.roots["home"]).as_posix()
+                                 for name in files)
+            self.emit("trace_inventory", paths=sorted(inventory))
             self.emit("stopped")
         finally:
             os.close(self.fd)
