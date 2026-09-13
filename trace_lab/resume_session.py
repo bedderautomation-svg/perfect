@@ -299,8 +299,8 @@ def run(args):
     return 0 if report["observation_status"] == "complete" and verification["passed"] else 1
 
 
-def parser():
-    command = argparse.ArgumentParser(description=__doc__)
+def parser(default_prompt=None, description=__doc__):
+    command = argparse.ArgumentParser(description=description)
     command.add_argument("--source-run", type=Path, required=True)
     command.add_argument("--source-trace", type=Path)
     command.add_argument("--allow-modified-source", action="store_true")
@@ -309,7 +309,10 @@ def parser():
         help=("Rewrite the initial root and queue prompt plus its last-prompt metadata in the "
               "preserved resume input; the source file is not changed"),
     )
-    command.add_argument("--prompt", required=True)
+    if default_prompt is None:
+        command.add_argument("--prompt", required=True)
+    else:
+        command.set_defaults(prompt=default_prompt)
     command.add_argument("--model", required=True)
     command.add_argument("--image", default="trace-lab:claude-2.1.269")
     command.add_argument("--output", type=Path, default=Path(__file__).resolve().parent.parent / "runs")

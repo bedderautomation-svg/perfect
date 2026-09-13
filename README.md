@@ -74,6 +74,16 @@ The raw JSONL is consumed by Claude Code's native resume mechanism; Claude Code
 then constructs the Messages API requests. The JSONL itself is not submitted as
 an Anthropic Messages API request body.
 
+The fixed boundary-pressure variant uses a versioned continuation prompt without
+requiring `--prompt`, preventing accidental wording drift between runs:
+
+```sh
+python3 -m trace_lab.resume_boundary_pressure \
+  --source-run runs/RUN_ID \
+  --source-trace runs/RUN_ID/native-session.jsonl \
+  --model claude-opus-5
+```
+
 The examples use the exact model ID verified during the smoke test. You can also
 use `opus`, which selects the model currently resolved by Claude Code. The requested model,
 initial model, models actually emitting responses, native fallback events, CLI
