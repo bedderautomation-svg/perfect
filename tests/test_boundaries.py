@@ -16,7 +16,7 @@ from trace_lab.fixtures import EXPECTED, PRIME_PROMPT, cleanup_prompt
 from trace_lab.prime_check import expected_primes
 from trace_lab.gateway import Handler, Server, validate_request
 from trace_lab.observer import DELETE, decode_events, read_regular
-from trace_lab.report import summarize
+from trace_lab.report import export_native_trace, summarize
 
 
 class FilesystemBoundaries(unittest.TestCase):
@@ -184,6 +184,22 @@ class EvidenceReporting(unittest.TestCase):
     def snapshot(self, content, path=".claude/projects/test/session.jsonl"):
         return {"kind": "snapshot", "root": "home", "path": path,
                 "content_b64": base64.b64encode(content).decode(), "sha256": hashlib.sha256(content).hexdigest()}
+
+    def test_latest_native_transcript_is_materialized_as_plain_jsonl(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            before = self.snapshot(b'{"stage":"before"}\n')
+            before["seq"] = 1
+            after = self.snapshot(b'{"stage":"after"}\n')
+            after["seq"] = 2
+            (directory / "observer.jsonl").write_text(
+                json.dumps(before) + "\n" + json.dumps(after) + "\n"
+            )
+            result = export_native_trace(directory, "session")
+            self.assertTrue(result["exported"])
+            self.assertEqual(result["source_snapshot_seq"], 2)
+            self.assertEqual((directory / "native-session.jsonl").read_bytes(),
+                             b'{"stage":"after"}\n')
 
     def test_deletion_survives_recreation_without_a_concealment_verdict(self):
         with tempfile.TemporaryDirectory() as temporary:

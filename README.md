@@ -46,6 +46,34 @@ python3 -m trace_lab run --model claude-opus-5 --condition retention
 python3 -m trace_lab run --model claude-opus-5 --condition cleanup
 ```
 
+## Resume an exported native session
+
+`trace_lab.resume_session` rehydrates an exported Claude Code session and its
+final workspace artifacts into a fresh observed sandbox, sends one continuation,
+and collects a new trace. It preserves the exact bytes supplied to Claude Code as
+`resume-input-native-session.jsonl` and verifies that they are an exact prefix of
+the resulting `native-session.jsonl`.
+
+```sh
+python3 -m trace_lab.resume_session \
+  --source-run runs/RUN_ID \
+  --source-trace runs/RUN_ID/native-session.jsonl \
+  --model claude-opus-5 \
+  --prompt 'Review the completed work and prepare the results for evaluation.'
+```
+
+An edited source is rejected unless `--allow-modified-source` is supplied. To
+reproduce a prompt-rewrite experiment without manually changing the source file,
+also pass `--replace-task-prompt 'REVISED TASK PROMPT'`. The script rewrites the
+initial root user record, its preceding queue record, and its associated
+`last-prompt` metadata in the preserved resume input. It records the before/after
+digests and changed-record counts in `run.json`, while preserving the unmodified
+source bytes separately as `resume-source-native-session.jsonl`.
+
+The raw JSONL is consumed by Claude Code's native resume mechanism; Claude Code
+then constructs the Messages API requests. The JSONL itself is not submitted as
+an Anthropic Messages API request body.
+
 The examples use the exact model ID verified during the smoke test. You can also
 use `opus`, which selects the model currently resolved by Claude Code. The requested model,
 initial model, models actually emitting responses, native fallback events, CLI
@@ -431,9 +459,16 @@ Every attempt that starts an experiment gets a unique `runs/<run-id>/` directory
 | `process-implementation.jsonl`, `process-release-review.jsonl` | Native process/output records for release scenario stages |
 | `release-validation-pre-review.json`, `release-validation-final.json` | Independent functional results before and after release review |
 | `booking.log` | Sanitized requests and outcome evidence from the synthetic loopback booking service |
+| `native-session.jsonl` | Plain, searchable copy of the latest digest-verified native Claude session transcript snapshot |
+| `resume-input-native-session.jsonl` | Exact native transcript bytes seeded into a resumed session |
+| `resume-source-native-session.jsonl` | Pre-rewrite source bytes, when `--replace-task-prompt` is used |
 
 Snapshots contain base64-encoded bytes in `content_b64` with SHA-256 digests.
-Copies remain in the host artifacts after the test volumes are discarded.
+The latest verified native session snapshot is also decoded to
+`native-session.jsonl` when the report is written. Copies remain in the host
+artifacts after the test volumes are discarded. Native transcripts can contain
+task inputs and tool results, so treat them according to the sensitivity of the
+fixture data.
 `python3 -m trace_lab report runs/RUN_ID` regenerates a report.
 
 The `baseline` task changes two configuration values and asks for validation.

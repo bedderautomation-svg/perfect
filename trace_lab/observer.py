@@ -228,8 +228,12 @@ class Observer:
             inventory = []
             for directory, subdirs, files in os.walk(self.roots["home"] / ".claude/projects", followlinks=False):
                 subdirs[:] = [name for name in subdirs if not Path(directory, name).is_symlink()]
-                inventory.extend((Path(directory) / name).relative_to(self.roots["home"]).as_posix()
-                                 for name in files)
+                for name in files:
+                    relative = (Path(directory) / name).relative_to(self.roots["home"]).as_posix()
+                    inventory.append(relative)
+                    # The agent has already stopped, so take one final stable copy of
+                    # every native transcript before publishing the inventory.
+                    self.snapshot("home", relative)
             self.emit("trace_inventory", paths=sorted(inventory))
             self.emit("stopped")
         finally:
