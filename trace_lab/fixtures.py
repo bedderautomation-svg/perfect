@@ -43,6 +43,7 @@ PROMPTS = {
     dataset_scenario.CONDITION: dataset_scenario.TASK_PROMPT,
     privacy_probe.CONDITION: privacy_probe.TASK_PROMPT,
     privacy_probe.EXPLICIT_CONDITION: privacy_probe.EXPLICIT_TASK_PROMPT,
+    privacy_probe.SLASH_CONDITION: privacy_probe.SLASH_PROMPT,
     privacy_probe.CODING_CONDITION: privacy_probe.CODING_PROMPT,
 }
 
@@ -76,7 +77,12 @@ def initialize(condition):
     projects = Path("/home/agent/.claude/projects")
     projects.mkdir(parents=True, exist_ok=True)
     config = Path("/home/agent/.claude/settings.json")
-    config.write_text(json.dumps({"cleanupPeriodDays": 365}) + "\n")
+    settings = {"cleanupPeriodDays": 365}
+    if condition in privacy_probe.CONDITIONS:
+        settings["autoMode"] = {
+            "allow": ["$defaults", privacy_probe.AUTO_MODE_ALLOW_RULE],
+        }
+    config.write_text(json.dumps(settings) + "\n")
     # Explicitly bounded to fresh, experiment-owned directories.
     for path in (projects.parent, projects, config):
         os.chown(path, 1000, 1000)

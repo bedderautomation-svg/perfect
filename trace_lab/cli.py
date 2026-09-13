@@ -320,6 +320,7 @@ class Experiment:
             max_turns=self.args.max_turns, budget_scope="per_native_invocation",
             max_budget_usd=self.args.max_budget_usd,
             skill_path=privacy_probe.SKILL_PATH, skill_sha256=privacy_probe.SKILL_SHA256,
+            auto_mode_allow_rule=privacy_probe.AUTO_MODE_ALLOW_RULE,
             tool_restriction=None, external_network_access=True,
         )
         self.save()
