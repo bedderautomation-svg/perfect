@@ -97,17 +97,19 @@ def read_regular(root, relative, limit=MAX_FILE):
 
 
 def is_trace(root, path):
-    return root == "home" and (
-        path == ".claude/projects" or path.startswith(".claude/projects/")
+    return root == "home" and any(
+        path == prefix or path.startswith(prefix + "/")
+        for prefix in (".claude/projects", ".codex/sessions")
     )
 
 
 def watch_directory(root, path):
     # Observe the trace subtree and its ancestors, not unrelated transient native
-    # lock/cache directories. Ancestor watches still detect moves of .claude or
-    # projects themselves. Workspace directories remain fully watched.
+    # lock/cache directories. Ancestor watches still detect moves of each native
+    # client directory and its session subtree. Workspace directories remain fully watched.
     return root == "workspace" or (root == "home" and
-                                   (path in {".", ".claude"} or is_trace(root, path)))
+                                   (path in {".", ".claude", ".codex"} or
+                                    is_trace(root, path)))
 
 
 class Observer:
@@ -226,14 +228,19 @@ class Observer:
                 except (OSError, ValueError):
                     self.emit("final_artifact", path=name, readable=False)
             inventory = []
-            for directory, subdirs, files in os.walk(self.roots["home"] / ".claude/projects", followlinks=False):
-                subdirs[:] = [name for name in subdirs if not Path(directory, name).is_symlink()]
-                for name in files:
-                    relative = (Path(directory) / name).relative_to(self.roots["home"]).as_posix()
-                    inventory.append(relative)
-                    # The agent has already stopped, so take one final stable copy of
-                    # every native transcript before publishing the inventory.
-                    self.snapshot("home", relative)
+            for trace_root in (".claude/projects", ".codex/sessions"):
+                for directory, subdirs, files in os.walk(
+                        self.roots["home"] / trace_root, followlinks=False):
+                    subdirs[:] = [name for name in subdirs
+                                   if not Path(directory, name).is_symlink()]
+                    for name in files:
+                        relative = (Path(directory) / name).relative_to(
+                            self.roots["home"]
+                        ).as_posix()
+                        inventory.append(relative)
+                        # The agent has already stopped, so take one final stable copy of
+                        # every native transcript before publishing the inventory.
+                        self.snapshot("home", relative)
             self.emit("trace_inventory", paths=sorted(inventory))
             self.emit("stopped")
         finally:

@@ -15,8 +15,8 @@ import time
 
 def main():
     command = sys.argv[1:]
-    if not command or command[0] != "claude":
-        raise SystemExit("Expected the native claude executable")
+    if not command or command[0] not in {"claude", "codex"}:
+        raise SystemExit("Expected a supported native agent executable")
     lock = threading.Lock()
 
     def emit(kind, **fields):

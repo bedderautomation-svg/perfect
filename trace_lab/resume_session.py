@@ -4,11 +4,13 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import tempfile
 import time
 
-from .cli import Experiment, docker, native_command, parser as main_parser
+from .cli import DEFAULT_IMAGE, Experiment, docker, native_command, parser as main_parser
+from .native import trace_path_matches
 from .report import read_jsonl, write_report
 
 
@@ -38,7 +40,7 @@ def _decode_jsonl(transcript):
     return records
 
 
-def rewrite_initial_task_prompt(transcript, replacement):
+def _rewrite_claude_initial_task_prompt(transcript, replacement):
     """Rewrite the initial SDK prompt and its stale native metadata records."""
     if not isinstance(replacement, str) or not replacement:
         raise RuntimeError("Replacement task prompt must be a non-empty string")
@@ -115,17 +117,104 @@ def rewrite_initial_task_prompt(transcript, replacement):
     return rendered, audit
 
 
+def _codex_message_texts(event):
+    payload = event.get("payload", {})
+    if (event.get("type") == "response_item" and payload.get("type") == "message"
+            and payload.get("role") == "user"):
+        return [block.get("text") for block in payload.get("content", [])
+                if isinstance(block, dict) and block.get("type") == "input_text"
+                and isinstance(block.get("text"), str)]
+    if event.get("type") == "event_msg" and payload.get("type") == "item_completed":
+        item = payload.get("item", {})
+        if item.get("type") == "UserMessage":
+            return [block.get("text") for block in item.get("content", [])
+                    if isinstance(block, dict) and block.get("type") == "text"
+                    and isinstance(block.get("text"), str)]
+    return []
+
+
+def _replace_codex_text(event, original, replacement):
+    changed = False
+    payload = event.get("payload", {})
+    containers = []
+    if (event.get("type") == "response_item" and payload.get("type") == "message"
+            and payload.get("role") == "user"):
+        containers.append(payload.get("content", []))
+    if event.get("type") == "event_msg" and payload.get("type") == "item_completed":
+        item = payload.get("item", {})
+        if item.get("type") == "UserMessage":
+            containers.append(item.get("content", []))
+    for content in containers:
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            for key in ("text",):
+                if block.get(key) == original:
+                    block[key] = replacement
+                    changed = True
+    return changed
+
+
+def _rewrite_codex_initial_task_prompt(transcript, replacement):
+    records = _decode_jsonl(transcript)
+    candidates = []
+    for index, (event, _, _) in enumerate(records):
+        texts = [text for text in _codex_message_texts(event)
+                 if not text.lstrip().startswith("<environment_context>")]
+        if event.get("type") == "response_item" and texts:
+            candidates.append((index, texts[0]))
+    if not candidates:
+        raise RuntimeError("Expected an initial Codex user task prompt in resume input")
+    root_index, original = candidates[0]
+    boundary = next((index for index, _ in candidates[1:]), len(records))
+    changed_indices = set()
+    changed = {"response_item_records": 0, "event_msg_records": 0}
+    for index in range(root_index, boundary):
+        event = records[index][0]
+        if _replace_codex_text(event, original, replacement):
+            changed_indices.add(index)
+            changed[("response_item_records" if event.get("type") == "response_item"
+                     else "event_msg_records")] += 1
+    rendered = b"".join(
+        (json.dumps(event, ensure_ascii=False, separators=(",", ":")).encode()
+         if index in changed_indices else payload) + ending
+        for index, (event, ending, payload) in enumerate(records)
+    )
+    audit = {
+        "client": "codex",
+        "original_prompt": original,
+        "replacement_prompt": replacement,
+        "records_changed": sum(changed.values()),
+        "changed_by_type": changed,
+        "sha256_before": hashlib.sha256(transcript).hexdigest(),
+        "sha256_after": hashlib.sha256(rendered).hexdigest(),
+        "size_before": len(transcript),
+        "size_after": len(rendered),
+    }
+    return rendered, audit
+
+
+def rewrite_initial_task_prompt(transcript, replacement, client="claude"):
+    """Rewrite the first user task and redundant native metadata representations."""
+    if not isinstance(replacement, str) or not replacement:
+        raise RuntimeError("Replacement task prompt must be a non-empty string")
+    if client == "claude":
+        return _rewrite_claude_initial_task_prompt(transcript, replacement)
+    if client == "codex":
+        return _rewrite_codex_initial_task_prompt(transcript, replacement)
+    raise RuntimeError(f"Unsupported native client: {client}")
+
+
 def source_details(source_run, source_trace=None, allow_modified=False, replacement_prompt=None):
     source_run = Path(source_run).resolve()
     metadata = json.loads((source_run / "run.json").read_text())
     report = json.loads((source_run / "report.json").read_text())
+    client = metadata.get("client", "claude")
     trace = report.get("native_trace", {})
     session_id = metadata.get("session_id") or report.get("session_id")
     source_path = PurePosixPath(trace.get("source_path", ""))
-    expected_name = f"{session_id}.jsonl"
-    if (not session_id or not trace.get("exported") or source_path.name != expected_name or
-            source_path.is_absolute() or source_path.parts[:2] != (".claude", "projects") or
-            any(part in {"", ".", ".."} for part in source_path.parts)):
+    if (not trace.get("exported") or
+            not trace_path_matches(source_path.as_posix(), session_id, client)):
         raise RuntimeError("Source run does not describe a safe exported native session")
     input_path = Path(source_trace).resolve() if source_trace else source_run / trace["path"]
     if not input_path.is_file() or input_path.is_symlink():
@@ -137,7 +226,7 @@ def source_details(source_run, source_trace=None, allow_modified=False, replacem
     if input_modified and not allow_modified:
         raise RuntimeError("Exported native session does not match its recorded digest and size")
     transcript, rewrite = ((source_transcript, None) if replacement_prompt is None else
-                           rewrite_initial_task_prompt(source_transcript, replacement_prompt))
+                           rewrite_initial_task_prompt(source_transcript, replacement_prompt, client))
     digest = hashlib.sha256(transcript).hexdigest()
     modified = digest != trace.get("sha256") or len(transcript) != trace.get("size_bytes")
     if not isinstance(metadata.get("condition"), str) or not metadata["condition"]:
@@ -146,6 +235,7 @@ def source_details(source_run, source_trace=None, allow_modified=False, replacem
         "directory": source_run,
         "metadata": metadata,
         "report": report,
+        "client": client,
         "session_id": session_id,
         "source_path": source_path,
         "input_path": input_path,
@@ -209,8 +299,13 @@ def run(args):
         args.source_run, args.source_trace, args.allow_modified_source, args.replace_task_prompt
     )
     condition = details["metadata"].get("condition")
+    credential = "OPENAI_API_KEY" if details["client"] == "codex" else "ANTHROPIC_API_KEY"
+    if not os.environ.get(credential):
+        raise RuntimeError(
+            f"Set {credential} locally for the gateway. Host native-client login files are never imported."
+        )
     base = [
-        "run", "--model", args.model, "--condition", condition,
+        "run", "--client", details["client"], "--model", args.model, "--condition", condition,
         "--image", args.image, "--output", str(args.output),
         "--max-turns", str(args.max_turns), "--max-budget-usd", str(args.max_budget_usd),
         "--max-requests", str(args.max_requests), "--timeout", str(args.timeout),
@@ -255,6 +350,7 @@ def run(args):
             requested_model=args.model, stages=[], controller_intervened=False,
             max_requests=args.max_requests, timeout_seconds=args.timeout,
             max_turns=args.max_turns, max_budget_usd=args.max_budget_usd,
+            native_budget_limits_enforced=details["client"] == "claude",
             prompt=args.prompt,
         )
         experiment.save()
@@ -306,15 +402,15 @@ def parser(default_prompt=None, description=__doc__):
     command.add_argument("--allow-modified-source", action="store_true")
     command.add_argument(
         "--replace-task-prompt",
-        help=("Rewrite the initial root and queue prompt plus its last-prompt metadata in the "
-              "preserved resume input; the source file is not changed"),
+        help=("Rewrite every native representation of the initial task prompt in the preserved "
+              "resume input; the source file is not changed"),
     )
     if default_prompt is None:
         command.add_argument("--prompt", required=True)
     else:
         command.set_defaults(prompt=default_prompt)
     command.add_argument("--model", required=True)
-    command.add_argument("--image", default="trace-lab:claude-2.1.269")
+    command.add_argument("--image", default=DEFAULT_IMAGE)
     command.add_argument("--output", type=Path, default=Path(__file__).resolve().parent.parent / "runs")
     command.add_argument("--max-turns", type=int, default=20)
     command.add_argument("--max-budget-usd", type=float, default=2.0)

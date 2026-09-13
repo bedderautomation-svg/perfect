@@ -15,11 +15,13 @@ import time
 import uuid
 
 from .fixtures import PRIME_CONDITIONS, PROMPTS, cleanup_prompt
+from .native import (CLIENTS, invocation_succeeded, session_id_from_stream,
+                     stderr_artifact, stream_artifact)
 from .report import read_jsonl, write_report
 from . import booking_scenario, dataset_scenario, privacy_probe, release_scenario
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_IMAGE = "trace-lab:claude-2.1.269"
+DEFAULT_IMAGE = "trace-lab:claude-2.1.269-codex-0.154.0"
 MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 LABEL = "org.trace-lab.run"
 
@@ -48,6 +50,30 @@ def agent_network_mode(kind, condition):
 
 
 def native_command(args, session_id, resume=False):
+    client = getattr(args, "client", "claude")
+    if client == "codex":
+        provider = (
+            'model_providers.trace_lab={name="Trace Lab",'
+            'base_url="http://127.0.0.1:8080/v1",env_key="OPENAI_API_KEY",'
+            'wire_api="responses",request_max_retries=0,stream_max_retries=0}'
+        )
+        common = [
+            "--json", "--model", args.model, "--skip-git-repo-check",
+            "--ignore-user-config", "--ignore-rules", "--strict-config",
+            "-c", 'approval_policy="never"',
+            "-c", 'sandbox_mode="danger-full-access"',
+            "-c", 'web_search="disabled"',
+            "-c", "features.apps=false",
+            "-c", "features.multi_agent=false",
+            "-c", "features.remote_plugin=false",
+            "-c", "feedback.enabled=false",
+            "-c", 'model_provider="trace_lab"', "-c", provider,
+        ]
+        if resume:
+            if not session_id:
+                raise ValueError("A Codex session ID is required for resume")
+            return ["codex", "exec", "resume", *common, session_id, "-"]
+        return ["codex", "exec", *common, "-C", "/workspace", "-"]
     return [
         "claude", "-p", "--output-format", "stream-json", "--verbose",
         "--resume" if resume else "--session-id", session_id, "--model", args.model,
@@ -73,8 +99,11 @@ class Experiment:
             "run_id": self.run_id, "kind": "calibration" if args.command == "calibrate" else "model",
             "condition": args.condition, "status": "starting",
             "started_at": datetime.now(timezone.utc).isoformat(),
+            "client": getattr(args, "client", "claude"),
             "image": args.image, "permission_mode": args.permission_mode,
             "cleanup_period_days": 365, "launch_mode": "native_cli_print",
+            "stream_artifact": stream_artifact(getattr(args, "client", "claude")),
+            "model_enforced_by_gateway": getattr(args, "client", "claude") == "codex",
             "artifacts": str(self.directory), "resources": {"containers": [], "volumes": []},
         }
         self.save()
@@ -161,21 +190,31 @@ class Experiment:
         self.capture_logs(self.observer, "observer")
         self.wait_for(lambda: self.observed(lambda event: event.get("kind") == "ready"))
         if self.metadata["kind"] == "model":
+            if self.metadata["client"] == "codex":
+                gateway_module, credential = "trace_lab.openai_gateway", "OPENAI_API_KEY"
+                gateway_args = ("--max-requests", str(self.args.max_requests),
+                                "--expected-model", self.args.model)
+            else:
+                gateway_module, credential = "trace_lab.gateway", "ANTHROPIC_API_KEY"
+                gateway_args = ("--max-requests", str(self.args.max_requests))
             gateway = self.start_container(
-                "gateway", "--network", "bridge", "--env", "ANTHROPIC_API_KEY",
+                "gateway", "--network", "bridge", "--env", credential,
                 "--mount", mount(relay, "/relay"),
-                command=("python3", "-m", "trace_lab.gateway", "--max-requests", str(self.args.max_requests)),
+                command=("python3", "-m", gateway_module, *gateway_args),
             )
             self.capture_logs(gateway, "gateway")
             self.wait_for(lambda: "gateway ready" in (self.directory / "gateway.log").read_text())
         agent_network = agent_network_mode(self.metadata["kind"], self.args.condition)
         self.metadata["agent_network"] = agent_network
         self.save()
+        agent_environment = (["--env", "OPENAI_API_KEY=sk-openai-trace-lab-placeholder"]
+                             if self.metadata["client"] == "codex" else
+                             ["--env", "ANTHROPIC_API_KEY=sk-ant-trace-lab-placeholder",
+                              "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080"])
         self.agent = self.start_container(
             "agent", "--network", agent_network, "--mount", mount(home, "/home/agent"),
             "--mount", mount(workspace, "/workspace"), "--mount", mount(relay, "/relay", True),
-            "--env", "ANTHROPIC_API_KEY=sk-ant-trace-lab-placeholder",
-            "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
+            *agent_environment,
         )
         self.capture_logs(self.agent, "relay")
         self.wait_for(lambda: "relay ready" in (self.directory / "relay.log").read_text())
@@ -195,7 +234,10 @@ class Experiment:
             self.capture_logs(booking, "booking")
             self.wait_for(lambda: any(event.get("kind") == "ready" for event in
                                      read_jsonl(self.directory / "booking.log")[0]))
-        self.metadata["claude_version"] = docker("exec", self.agent, "claude", "--version").stdout.strip()
+        version_key = self.metadata["client"] + "_version"
+        self.metadata[version_key] = docker(
+            "exec", self.agent, self.metadata["client"], "--version"
+        ).stdout.strip()
         self.metadata["status"] = "running"
         self.save()
 
@@ -234,8 +276,8 @@ class Experiment:
         self.metadata.update(native_argv=command, prompt=prompt, requested_model=self.args.model,
                              max_requests=self.args.max_requests, timeout_seconds=self.args.timeout)
         self.save()
-        output = self.stack.enter_context((self.directory / "claude.jsonl").open("wb"))
-        error = self.stack.enter_context((self.directory / "claude.stderr").open("wb"))
+        output = self.stack.enter_context((self.directory / stream_artifact(self.metadata["client"])).open("wb"))
+        error = self.stack.enter_context((self.directory / stderr_artifact(self.metadata["client"])).open("wb"))
         process = subprocess.Popen(["docker", "exec", "-i", self.agent, *command],
                                    stdin=subprocess.PIPE, stdout=output, stderr=error)
         try:
@@ -295,7 +337,8 @@ class Experiment:
         records, errors = read_jsonl(transport_path)
         started = [record for record in records if record.get("kind") == "started"]
         exited = [record for record in records if record.get("kind") == "exited"]
-        with (self.directory / "claude.jsonl").open("ab") as output, (self.directory / "claude.stderr").open("ab") as error:
+        with (self.directory / stream_artifact(self.metadata["client"])).open("ab") as output, \
+                (self.directory / stderr_artifact(self.metadata["client"])).open("ab") as error:
             for record in records:
                 if record.get("kind") in {"stdout", "stderr"}:
                     target = output if record["kind"] == "stdout" else error
@@ -319,6 +362,7 @@ class Experiment:
             max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
             max_turns=self.args.max_turns, budget_scope="per_native_invocation",
             max_budget_usd=self.args.max_budget_usd,
+            native_budget_limits_enforced=self.metadata["client"] == "claude",
             skill_path=privacy_probe.SKILL_PATH, skill_sha256=privacy_probe.SKILL_SHA256,
             auto_mode_allow_rule=privacy_probe.AUTO_MODE_ALLOW_RULE,
             tool_restriction=None, external_network_access=True,
@@ -348,13 +392,14 @@ class Experiment:
         self.metadata.update(exit_code=stage["exit_code"], status="finished")
 
     def run_hotel_booking(self):
-        session_id = str(uuid.uuid4())
+        session_id = None if self.metadata["client"] == "codex" else str(uuid.uuid4())
         self.metadata.update(
             scenario_type="personal_sandbox_booking", session_id=session_id,
             requested_model=self.args.model, stages=[], controller_intervened=False,
             max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
             max_turns=self.args.max_turns, budget_scope="per_native_invocation",
             max_budget_usd=self.args.max_budget_usd,
+            native_budget_limits_enforced=self.metadata["client"] == "claude",
             booking_service_url=booking_scenario.BASE_URL,
             input_path=booking_scenario.INPUT_PATH,
             input_sha256=booking_scenario.TASK_DATA_SHA256,
@@ -366,6 +411,12 @@ class Experiment:
             "booking", native_command(self.args, session_id), booking_scenario.TASK_PROMPT,
             time.monotonic() + self.args.timeout,
         )
+        if self.metadata["client"] == "codex":
+            stream, errors = read_jsonl(self.directory / stream_artifact("codex"))
+            session_id = session_id_from_stream("codex", stream)
+            if errors or not session_id:
+                raise RuntimeError("Codex did not emit a usable native thread ID")
+            self.metadata["session_id"] = session_id
         self.metadata.update(exit_code=stage["exit_code"], status="finished")
 
     def validate_primes(self):
@@ -399,9 +450,8 @@ class Experiment:
         deadline = time.monotonic() + self.args.timeout
         first = self.supervised_stage("primes", native_command(self.args, session_id),
                                       PROMPTS[self.args.condition], deadline)
-        stream, errors = read_jsonl(self.directory / "claude.jsonl")
-        results = [event for event in stream if event.get("type") == "result"]
-        if first["exit_code"] or errors or not results or results[-1].get("is_error"):
+        stream, errors = read_jsonl(self.directory / stream_artifact(self.metadata["client"]))
+        if first["exit_code"] or errors or not invocation_succeeded(self.metadata["client"], stream):
             raise RuntimeError("Prime-writing stage did not finish successfully")
         self.validate_primes()
         second = self.supervised_stage("cleanup", native_command(self.args, session_id, resume=True),
@@ -448,9 +498,8 @@ class Experiment:
         deadline = time.monotonic() + self.args.timeout
         first = self.supervised_stage("implementation", native_command(self.args, session_id),
                                       release_scenario.TASK_PROMPT, deadline)
-        stream, errors = read_jsonl(self.directory / "claude.jsonl")
-        results = [event for event in stream if event.get("type") == "result"]
-        if first["exit_code"] or errors or not results or results[-1].get("is_error"):
+        stream, errors = read_jsonl(self.directory / stream_artifact(self.metadata["client"]))
+        if first["exit_code"] or errors or not invocation_succeeded(self.metadata["client"], stream):
             raise RuntimeError("Release implementation stage did not finish successfully")
         validation = self.validate_release("pre-review", deadline)
         second = self.supervised_stage(
@@ -505,8 +554,14 @@ class Experiment:
 
 def execute(args):
     check_engine()
-    if args.command == "run" and not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError("Set ANTHROPIC_API_KEY locally for the gateway. Host Claude login files are never imported.")
+    credential = "OPENAI_API_KEY" if getattr(args, "client", "claude") == "codex" else "ANTHROPIC_API_KEY"
+    if args.command == "run" and not os.environ.get(credential):
+        raise RuntimeError(
+            f"Set {credential} locally for the gateway. Host native-client login files are never imported."
+        )
+    if (args.command == "run" and args.client == "codex" and
+            args.condition != booking_scenario.CONDITION):
+        raise RuntimeError("Codex currently supports the hotel-booking-json experiment and its session resume")
     if args.command == "run" and args.condition in privacy_probe.CONDITIONS:
         for field, ceiling in privacy_probe.LIMITS.items():
             setattr(args, field, min(getattr(args, field), ceiling))
@@ -566,11 +621,12 @@ def positive_float(value):
 
 
 def parser():
-    root = argparse.ArgumentParser(description="Observe native Claude Code in a disposable environment.")
+    root = argparse.ArgumentParser(description="Observe a native coding agent in a disposable environment.")
     commands = root.add_subparsers(dest="command", required=True)
     commands.add_parser("doctor", help="Check Docker and whether a gateway credential is available")
-    build = commands.add_parser("build", help="Build the pinned native Claude Code image")
+    build = commands.add_parser("build", help="Build the pinned native Claude Code and Codex image")
     build.add_argument("--claude-version", default="2.1.269")
+    build.add_argument("--codex-version", default="0.154.0")
     build.add_argument("--image", default=DEFAULT_IMAGE)
     for name in ("calibrate", "run"):
         command = commands.add_parser(name)
@@ -579,6 +635,7 @@ def parser():
         command.add_argument("--condition", choices=PROMPTS, default="baseline")
         command.add_argument("--permission-mode", choices=["default", "acceptEdits", "auto"], default="auto")
         if name == "run":
+            command.add_argument("--client", choices=CLIENTS, default="claude")
             command.add_argument("--model", required=True, help="Exact model ID preferred; aliases are recorded too")
             command.add_argument("--max-turns", type=positive_int, default=20)
             command.add_argument("--max-budget-usd", type=positive_float, default=2.0)
@@ -598,13 +655,18 @@ def main():
             version = check_engine()
             print(json.dumps({"docker_server": version,
                               "api_key_available": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                              "anthropic_api_key_available": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                              "openai_api_key_available": bool(os.environ.get("OPENAI_API_KEY")),
                               "default_image_available": docker("image", "inspect", DEFAULT_IMAGE, check=False).returncode == 0}, indent=2))
             return 0
         if args.command == "build":
             check_engine()
             if not re.fullmatch(r"\d+\.\d+\.\d+", args.claude_version):
                 raise RuntimeError("Use an exact CLI version such as 2.1.269")
+            if not re.fullmatch(r"\d+\.\d+\.\d+", args.codex_version):
+                raise RuntimeError("Use an exact Codex CLI version such as 0.154.0")
             return subprocess.call(["docker", "build", "--build-arg", f"CLAUDE_VERSION={args.claude_version}",
+                                    "--build-arg", f"CODEX_VERSION={args.codex_version}",
                                     "--tag", args.image, str(ROOT)])
         if args.command == "report":
             result = write_report(args.directory.resolve())
