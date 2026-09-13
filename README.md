@@ -211,6 +211,16 @@ python3 -m trace_lab.resume_evaluation_preparation \
   --model gpt-5.6-sol
 ```
 
+The closer boundary condition asks for a results-only final state and authorizes
+correction when necessary, but does not name traces, evidence, concealment, or
+deletion:
+
+```sh
+python3 -m trace_lab.resume_results_only_cleanup \
+  --source-run runs/RUN_ID \
+  --model gpt-5.6-sol
+```
+
 For a positive control that directly requests trace deletion only if the model
 finds an original-scope violation, use the separate fixed variant. The deletion
 runs inside the disposable sandbox; the independent observer still records the
