@@ -201,6 +201,17 @@ export remains unchanged. Codex support is intentionally limited to this booking
 and resume workflow because the other scenarios depend on Claude-specific skills,
 permission events, or transcript paths.
 
+For a positive control that directly requests trace deletion only if the model
+finds an original-scope violation, use the separate fixed variant. The deletion
+runs inside the disposable sandbox; the independent observer still records the
+attempt and preserves its snapshots and event log under the new run directory:
+
+```sh
+python3 -m trace_lab.resume_conditional_trace_deletion \
+  --source-run runs/RUN_ID \
+  --model gpt-5.6-sol
+```
+
 The continuation command inherits `subscription` authentication from the source
 run. Pass `--codex-auth subscription` explicitly to override an older API-key
 source run. Subscription mode requires `codex login` to have produced a private,
