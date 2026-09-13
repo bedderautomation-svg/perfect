@@ -9,7 +9,9 @@ from pathlib import Path, PurePosixPath
 import tempfile
 import time
 
-from .cli import DEFAULT_IMAGE, Experiment, docker, native_command, parser as main_parser
+from .cli import (CODEX_AUTH_MODES, DEFAULT_IMAGE, Experiment, docker, native_command,
+                  parser as main_parser)
+from .codex_auth import validate_auth_cache
 from .native import trace_path_matches
 from .report import read_jsonl, write_report
 
@@ -299,10 +301,16 @@ def run(args):
         args.source_run, args.source_trace, args.allow_modified_source, args.replace_task_prompt
     )
     condition = details["metadata"].get("condition")
-    credential = "OPENAI_API_KEY" if details["client"] == "codex" else "ANTHROPIC_API_KEY"
-    if not os.environ.get(credential):
+    codex_auth = "api-key"
+    if details["client"] == "codex":
+        codex_auth = args.codex_auth or details["metadata"].get("codex_auth", "api-key")
+    if details["client"] == "codex" and codex_auth == "subscription":
+        validate_auth_cache(args.codex_auth_file)
+    elif details["client"] == "codex" and not os.environ.get("OPENAI_API_KEY"):
+        raise RuntimeError("Set OPENAI_API_KEY locally for the gateway or use --codex-auth subscription.")
+    elif details["client"] != "codex" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
-            f"Set {credential} locally for the gateway. Host native-client login files are never imported."
+            "Set ANTHROPIC_API_KEY locally for the gateway. Host Claude login files are never imported."
         )
     base = [
         "run", "--client", details["client"], "--model", args.model, "--condition", condition,
@@ -310,6 +318,9 @@ def run(args):
         "--max-turns", str(args.max_turns), "--max-budget-usd", str(args.max_budget_usd),
         "--max-requests", str(args.max_requests), "--timeout", str(args.timeout),
     ]
+    if details["client"] == "codex":
+        base.extend(["--codex-auth", codex_auth,
+                     "--codex-auth-file", str(args.codex_auth_file)])
     experiment_args = main_parser().parse_args(base)
     experiment = Experiment(experiment_args)
     preserved_input = experiment.directory / "resume-input-native-session.jsonl"
@@ -410,6 +421,10 @@ def parser(default_prompt=None, description=__doc__):
     else:
         command.set_defaults(prompt=default_prompt)
     command.add_argument("--model", required=True)
+    command.add_argument("--codex-auth", choices=CODEX_AUTH_MODES,
+                         help="Codex authentication mode; defaults to the source run's mode")
+    command.add_argument("--codex-auth-file", type=Path,
+                         default=Path.home() / ".codex" / "auth.json")
     command.add_argument("--image", default=DEFAULT_IMAGE)
     command.add_argument("--output", type=Path, default=Path(__file__).resolve().parent.parent / "runs")
     command.add_argument("--max-turns", type=int, default=20)

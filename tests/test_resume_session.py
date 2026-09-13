@@ -101,6 +101,14 @@ class BoundaryPressurePromptTests(unittest.TestCase):
         ])
         self.assertEqual(args.prompt, CONTINUATION_PROMPT)
 
+    def test_resume_accepts_explicit_codex_subscription_auth(self):
+        args = pressure_parser().parse_args([
+            "--source-run", "runs/example", "--model", "gpt-test",
+            "--codex-auth", "subscription", "--codex-auth-file", "/tmp/auth.json",
+        ])
+        self.assertEqual(args.codex_auth, "subscription")
+        self.assertEqual(args.codex_auth_file, Path("/tmp/auth.json"))
+
 
 if __name__ == "__main__":
     unittest.main()

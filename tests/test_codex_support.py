@@ -10,7 +10,12 @@ import threading
 import unittest
 from unittest.mock import patch
 
+from trace_lab.chatgpt_gateway import (Handler as ChatGPTHandler,
+                                       Server as ChatGPTServer,
+                                       validate_models_request,
+                                       validate_request as validate_chatgpt_request)
 from trace_lab.cli import native_command, parser
+from trace_lab.codex_auth import install_auth_cache, validate_auth_cache
 from trace_lab.native import trace_path_matches
 from trace_lab.observer import is_trace, watch_directory
 from trace_lab.openai_gateway import Handler, Server, validate_request
@@ -48,6 +53,17 @@ class CodexCommandTests(unittest.TestCase):
         command = native_command(self.args(), SESSION_ID, resume=True)
         self.assertEqual(command[:3], ["codex", "exec", "resume"])
         self.assertEqual(command[-2:], [SESSION_ID, "-"])
+
+    def test_subscription_command_uses_openai_auth_through_fixed_gateway(self):
+        args = self.args()
+        args.codex_auth = "subscription"
+        command = native_command(args, None)
+        provider = next(value for value in command if "model_providers.trace_lab" in value)
+        self.assertIn("/backend-api/codex", provider)
+        self.assertIn("requires_openai_auth=true", provider)
+        self.assertNotIn("env_key", provider)
+        self.assertIn("features.responses_websockets=false", command)
+        self.assertIn("features.responses_websockets_v2=false", command)
 
     def test_process_supervisor_accepts_codex(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -93,6 +109,15 @@ class CodexGatewayTests(unittest.TestCase):
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 validate_request("/v1/responses", self.body(**changes), "gpt-test")
+
+    def test_local_function_namespace_is_allowed_but_hosted_child_is_rejected(self):
+        namespace = {"type": "namespace", "name": "local", "tools": [
+            {"type": "function", "name": "read_file"},
+        ]}
+        validate_request("/v1/responses", self.body(tools=[namespace]), "gpt-test")
+        namespace["tools"].append({"type": "web_search_preview"})
+        with self.assertRaises(ValueError):
+            validate_request("/v1/responses", self.body(tools=[namespace]), "gpt-test")
 
     def gateway_request(self, response):
         with tempfile.TemporaryDirectory(prefix="tl-openai-", dir="/tmp") as temporary:
@@ -159,6 +184,123 @@ class CodexGatewayTests(unittest.TestCase):
         self.assertIn(b"Upstream authentication failed", response)
         self.assertNotIn(b"gateway-test-credential", response)
 
+
+class CodexSubscriptionAuthTests(unittest.TestCase):
+    def value(self):
+        return {
+            "auth_mode": "chatgpt", "OPENAI_API_KEY": None,
+            "tokens": {name: "test-" + name for name in
+                       ("access_token", "account_id", "id_token", "refresh_token")},
+        }
+
+    def test_private_chatgpt_cache_is_validated_and_copied_exactly(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source = Path(temporary) / "auth.json"
+            content = json.dumps(self.value()).encode()
+            source.write_bytes(content)
+            source.chmod(0o600)
+            self.assertEqual(validate_auth_cache(source), source)
+            destination = Path(temporary) / "home" / ".codex" / "auth.json"
+            install_auth_cache(source, destination, uid=-1, gid=-1)
+            self.assertEqual(destination.read_bytes(), content)
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
+
+    def test_cache_rejects_symlinks_permissions_and_non_chatgpt_auth(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            source = directory / "auth.json"
+            source.write_text(json.dumps(self.value()))
+            source.chmod(0o644)
+            with self.assertRaisesRegex(RuntimeError, "group or others"):
+                validate_auth_cache(source)
+            source.chmod(0o600)
+            link = directory / "linked.json"
+            link.symlink_to(source)
+            with self.assertRaisesRegex(RuntimeError, "non-symlink"):
+                validate_auth_cache(link)
+            value = self.value()
+            value["auth_mode"] = "api"
+            source.write_text(json.dumps(value))
+            source.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, "ChatGPT"):
+                validate_auth_cache(source)
+
+
+class CodexSubscriptionGatewayTests(unittest.TestCase):
+    def body(self, **changes):
+        return json.dumps({
+            "model": "gpt-test", "input": [], "store": False,
+            "tools": [{"type": "function", "name": "shell"}], **changes,
+        }).encode()
+
+    def test_only_chatgpt_codex_responses_endpoints_are_allowed(self):
+        for path in ("/backend-api/codex/responses", "/backend-api/codex/responses/compact"):
+            self.assertEqual(validate_chatgpt_request(path, self.body(), "gpt-test"), path)
+        for path in ("/v1/responses", "/backend-api/accounts", "//example.com/responses",
+                     "/backend-api/codex/responses?escape=true"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                validate_chatgpt_request(path, self.body(), "gpt-test")
+
+    def test_model_catalog_requires_one_semver_client_version(self):
+        path = "/backend-api/codex/models?client_version=0.154.0"
+        self.assertEqual(validate_models_request(path), path)
+        for invalid in ("/backend-api/codex/models", "/backend-api/codex/models?x=1",
+                        "/backend-api/codex/models?client_version=latest",
+                        "//example.com/backend-api/codex/models?client_version=0.154.0"):
+            with self.subTest(path=invalid), self.assertRaises(ValueError):
+                validate_models_request(invalid)
+
+    def test_gateway_forwards_subscription_auth_only_to_chatgpt(self):
+        class Response:
+            status = 200
+            chunks = iter([b"event: response.completed\ndata: {}\n\n", b""])
+
+            def getheader(self, name, default=None):
+                return "text/event-stream" if name == "Content-Type" else default
+
+            def getheaders(self):
+                return [("Content-Type", "text/event-stream"),
+                        ("X-Codex-Turn-State", "test-state")]
+
+            def read1(self, size):
+                return next(self.chunks)
+
+        with tempfile.TemporaryDirectory(prefix="tl-chatgpt-", dir="/tmp") as temporary:
+            endpoint = str(Path(temporary) / "api.sock")
+            with patch("trace_lab.chatgpt_gateway.http.client.HTTPSConnection") as connection:
+                upstream = connection.return_value
+                upstream.getresponse.return_value = Response()
+                with ChatGPTServer(endpoint, ChatGPTHandler) as server:
+                    server.expected_model = "gpt-test"
+                    server.request_lock = threading.Lock()
+                    server.remaining = 1
+                    thread = threading.Thread(target=server.serve_forever, daemon=True)
+                    thread.start()
+                    try:
+                        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+                            client.settimeout(3)
+                            client.connect(endpoint)
+                            body = self.body()
+                            client.sendall((
+                                "POST /backend-api/codex/responses HTTP/1.1\r\nHost: local\r\n"
+                                "Authorization: Bearer subscription-test-token\r\n"
+                                "ChatGPT-Account-Id: account-test\r\n"
+                                f"Content-Length: {len(body)}\r\n\r\n"
+                            ).encode() + body)
+                            chunks = []
+                            while chunk := client.recv(65536):
+                                chunks.append(chunk)
+                    finally:
+                        server.shutdown()
+                        thread.join(timeout=3)
+                response = b"".join(chunks)
+                connection.assert_called_once_with("chatgpt.com", timeout=60)
+                headers = upstream.request.call_args.kwargs["headers"]
+                self.assertEqual(headers["Authorization"], "Bearer subscription-test-token")
+                self.assertEqual(headers["ChatGPT-Account-Id"], "account-test")
+                self.assertIn(b"200 OK", response)
+                self.assertIn(b"X-Codex-Turn-State: test-state", response)
+                self.assertNotIn(b"subscription-test-token", response)
 
 class CodexTraceTests(unittest.TestCase):
     OLD = "Complete the original task."

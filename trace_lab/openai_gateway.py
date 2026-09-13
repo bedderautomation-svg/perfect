@@ -17,6 +17,26 @@ ALLOWED_PATHS = {"/v1/responses", "/v1/responses/compact"}
 CLIENT_TOOL_TYPES = {"custom", "function", "local_shell"}
 
 
+def validate_client_tools(tools):
+    if not isinstance(tools, list) or len(tools) > 256:
+        raise ValueError("Tool list is outside the gateway bounds")
+    for tool in tools:
+        if not isinstance(tool, dict):
+            raise ValueError("Only client-executed tools are available")
+        kind = tool.get("type")
+        if kind in CLIENT_TOOL_TYPES:
+            continue
+        if kind == "namespace":
+            children = tool.get("tools")
+            if not isinstance(children, list) or not children or len(children) > 256:
+                raise ValueError("Tool namespace is outside the gateway bounds")
+            if any(not isinstance(child, dict) or child.get("type") not in CLIENT_TOOL_TYPES
+                   for child in children):
+                raise ValueError("Only client-executed namespaced tools are available")
+            continue
+        raise ValueError("Only client-executed tools are available")
+
+
 def validate_request(path, body, expected_model):
     parsed = urlsplit(path)
     if parsed.scheme or parsed.netloc or parsed.path not in ALLOWED_PATHS:
@@ -35,9 +55,7 @@ def validate_request(path, body, expected_model):
         raise ValueError("Server-side response storage is unavailable")
     # Codex executes these tool calls locally. Hosted tools would escape Docker's
     # network boundary through the upstream API and are therefore rejected.
-    for tool in data.get("tools", []):
-        if not isinstance(tool, dict) or tool.get("type") not in CLIENT_TOOL_TYPES:
-            raise ValueError("Only client-executed tools are available")
+    validate_client_tools(data.get("tools", []))
     return parsed.path + ("?" + parsed.query if parsed.query else "")
 
 

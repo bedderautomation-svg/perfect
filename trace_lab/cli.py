@@ -18,12 +18,14 @@ from .fixtures import PRIME_CONDITIONS, PROMPTS, cleanup_prompt
 from .native import (CLIENTS, invocation_succeeded, session_id_from_stream,
                      stderr_artifact, stream_artifact)
 from .report import read_jsonl, write_report
+from .codex_auth import validate_auth_cache
 from . import booking_scenario, dataset_scenario, privacy_probe, release_scenario
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "trace-lab:claude-2.1.269-codex-0.154.0"
 MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 LABEL = "org.trace-lab.run"
+CODEX_AUTH_MODES = ("api-key", "subscription")
 
 
 def docker(*args, timeout=60, check=True):
@@ -45,6 +47,21 @@ def mount(volume, destination, readonly=False):
     return f"type=volume,src={volume},dst={destination},volume-nocopy" + (",readonly" if readonly else "")
 
 
+def bind_mount(source, destination, readonly=True):
+    if any(character in str(source) for character in (",", "\n", "\0")):
+        raise RuntimeError("Docker bind source contains an unsupported character")
+    value = f"type=bind,src={source},dst={destination}"
+    return value + (",readonly" if readonly else "")
+
+
+def _codex_subscription_available(path=None):
+    try:
+        validate_auth_cache(path or Path.home() / ".codex" / "auth.json")
+        return True
+    except (OSError, RuntimeError):
+        return False
+
+
 def agent_network_mode(kind, condition):
     return "bridge" if kind == "model" and condition in privacy_probe.CONDITIONS else "none"
 
@@ -52,11 +69,19 @@ def agent_network_mode(kind, condition):
 def native_command(args, session_id, resume=False):
     client = getattr(args, "client", "claude")
     if client == "codex":
-        provider = (
-            'model_providers.trace_lab={name="Trace Lab",'
-            'base_url="http://127.0.0.1:8080/v1",env_key="OPENAI_API_KEY",'
-            'wire_api="responses",request_max_retries=0,stream_max_retries=0}'
-        )
+        if args.codex_auth == "subscription":
+            provider = (
+                'model_providers.trace_lab={name="Trace Lab ChatGPT",'
+                'base_url="http://127.0.0.1:8080/backend-api/codex",'
+                'requires_openai_auth=true,wire_api="responses",request_max_retries=0,'
+                'stream_max_retries=0}'
+            )
+        else:
+            provider = (
+                'model_providers.trace_lab={name="Trace Lab",'
+                'base_url="http://127.0.0.1:8080/v1",env_key="OPENAI_API_KEY",'
+                'wire_api="responses",request_max_retries=0,stream_max_retries=0}'
+            )
         common = [
             "--json", "--model", args.model, "--skip-git-repo-check",
             "--ignore-user-config", "--ignore-rules", "--strict-config",
@@ -66,6 +91,8 @@ def native_command(args, session_id, resume=False):
             "-c", "features.apps=false",
             "-c", "features.multi_agent=false",
             "-c", "features.remote_plugin=false",
+            "-c", "features.responses_websockets=false",
+            "-c", "features.responses_websockets_v2=false",
             "-c", "feedback.enabled=false",
             "-c", 'model_provider="trace_lab"', "-c", provider,
         ]
@@ -106,6 +133,13 @@ class Experiment:
             "model_enforced_by_gateway": getattr(args, "client", "claude") == "codex",
             "artifacts": str(self.directory), "resources": {"containers": [], "volumes": []},
         }
+        if self.metadata["client"] == "codex":
+            self.metadata.update(
+                codex_auth=args.codex_auth,
+                subscription_auth_cache_copied=False,
+                subscription_auth_persisted_in_artifacts=False,
+                subscription_auth_readable_by_native_process=args.codex_auth == "subscription",
+            )
         self.save()
 
     def save(self):
@@ -180,6 +214,22 @@ class Experiment:
         code = docker("wait", initializer).stdout.strip()
         if code != "0":
             raise RuntimeError("Fixture initialization failed: " + docker("logs", initializer).stdout)
+        if self.metadata["client"] == "codex" and self.args.codex_auth == "subscription":
+            auth_source = validate_auth_cache(self.args.codex_auth_file).resolve()
+            auth_initializer = self.start_container(
+                "codex-auth-init", "--network", "none",
+                "--mount", mount(home, "/home/agent"),
+                "--mount", bind_mount(auth_source, "/run/host-codex-auth.json"),
+                command=("python3", "-m", "trace_lab.codex_auth", "/run/host-codex-auth.json",
+                         "/home/agent/.codex/auth.json"),
+                caps=("CHOWN", "DAC_OVERRIDE"), user="0:0",
+            )
+            code = docker("wait", auth_initializer).stdout.strip()
+            if code != "0":
+                raise RuntimeError("Codex subscription auth initialization failed: " +
+                                   docker("logs", auth_initializer).stdout)
+            self.metadata["subscription_auth_cache_copied"] = True
+            self.save()
         self.observer = self.start_container(
             "observer", "--network", "none",
             "--mount", mount(home, "/watched/home", True),
@@ -191,14 +241,18 @@ class Experiment:
         self.wait_for(lambda: self.observed(lambda event: event.get("kind") == "ready"))
         if self.metadata["kind"] == "model":
             if self.metadata["client"] == "codex":
-                gateway_module, credential = "trace_lab.openai_gateway", "OPENAI_API_KEY"
+                if self.args.codex_auth == "subscription":
+                    gateway_module, credential = "trace_lab.chatgpt_gateway", None
+                else:
+                    gateway_module, credential = "trace_lab.openai_gateway", "OPENAI_API_KEY"
                 gateway_args = ("--max-requests", str(self.args.max_requests),
                                 "--expected-model", self.args.model)
             else:
                 gateway_module, credential = "trace_lab.gateway", "ANTHROPIC_API_KEY"
                 gateway_args = ("--max-requests", str(self.args.max_requests))
+            gateway_environment = ("--env", credential) if credential else ()
             gateway = self.start_container(
-                "gateway", "--network", "bridge", "--env", credential,
+                "gateway", "--network", "bridge", *gateway_environment,
                 "--mount", mount(relay, "/relay"),
                 command=("python3", "-m", gateway_module, *gateway_args),
             )
@@ -207,10 +261,14 @@ class Experiment:
         agent_network = agent_network_mode(self.metadata["kind"], self.args.condition)
         self.metadata["agent_network"] = agent_network
         self.save()
-        agent_environment = (["--env", "OPENAI_API_KEY=sk-openai-trace-lab-placeholder"]
-                             if self.metadata["client"] == "codex" else
-                             ["--env", "ANTHROPIC_API_KEY=sk-ant-trace-lab-placeholder",
-                              "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080"])
+        if self.metadata["client"] == "codex":
+            agent_environment = (["--env", "OPENAI_API_KEY=sk-openai-trace-lab-placeholder"]
+                                 if self.args.codex_auth == "api-key" else [])
+        else:
+            agent_environment = [
+                "--env", "ANTHROPIC_API_KEY=sk-ant-trace-lab-placeholder",
+                "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
+            ]
         self.agent = self.start_container(
             "agent", "--network", agent_network, "--mount", mount(home, "/home/agent"),
             "--mount", mount(workspace, "/workspace"), "--mount", mount(relay, "/relay", True),
@@ -554,10 +612,14 @@ class Experiment:
 
 def execute(args):
     check_engine()
-    credential = "OPENAI_API_KEY" if getattr(args, "client", "claude") == "codex" else "ANTHROPIC_API_KEY"
-    if args.command == "run" and not os.environ.get(credential):
+    if args.command == "run" and getattr(args, "client", "claude") == "codex":
+        if args.codex_auth == "subscription":
+            validate_auth_cache(args.codex_auth_file)
+        elif not os.environ.get("OPENAI_API_KEY"):
+            raise RuntimeError("Set OPENAI_API_KEY locally for the gateway or use --codex-auth subscription.")
+    elif args.command == "run" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError(
-            f"Set {credential} locally for the gateway. Host native-client login files are never imported."
+            "Set ANTHROPIC_API_KEY locally for the gateway. Host Claude login files are never imported."
         )
     if (args.command == "run" and args.client == "codex" and
             args.condition != booking_scenario.CONDITION):
@@ -637,6 +699,9 @@ def parser():
         if name == "run":
             command.add_argument("--client", choices=CLIENTS, default="claude")
             command.add_argument("--model", required=True, help="Exact model ID preferred; aliases are recorded too")
+            command.add_argument("--codex-auth", choices=CODEX_AUTH_MODES, default="api-key")
+            command.add_argument("--codex-auth-file", type=Path,
+                                 default=Path.home() / ".codex" / "auth.json")
             command.add_argument("--max-turns", type=positive_int, default=20)
             command.add_argument("--max-budget-usd", type=positive_float, default=2.0)
             command.add_argument("--max-requests", type=positive_int, default=60)
@@ -657,6 +722,7 @@ def main():
                               "api_key_available": bool(os.environ.get("ANTHROPIC_API_KEY")),
                               "anthropic_api_key_available": bool(os.environ.get("ANTHROPIC_API_KEY")),
                               "openai_api_key_available": bool(os.environ.get("OPENAI_API_KEY")),
+                              "codex_subscription_available": _codex_subscription_available(),
                               "default_image_available": docker("image", "inspect", DEFAULT_IMAGE, check=False).returncode == 0}, indent=2))
             return 0
         if args.command == "build":
