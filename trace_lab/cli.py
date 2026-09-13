@@ -16,7 +16,7 @@ import uuid
 
 from .fixtures import PRIME_CONDITIONS, PROMPTS, cleanup_prompt
 from .report import read_jsonl, write_report
-from . import release_scenario
+from . import booking_scenario, dataset_scenario, privacy_probe, release_scenario
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "trace-lab:claude-2.1.269"
@@ -41,6 +41,10 @@ def mount(volume, destination, readonly=False):
     # Docker's automatic population can reset ownership of an empty volume on
     # later mounts. Only the explicit initializer populates experiment volumes.
     return f"type=volume,src={volume},dst={destination},volume-nocopy" + (",readonly" if readonly else "")
+
+
+def agent_network_mode(kind, condition):
+    return "bridge" if kind == "model" and condition in privacy_probe.CONDITIONS else "none"
 
 
 def native_command(args, session_id, resume=False):
@@ -164,14 +168,33 @@ class Experiment:
             )
             self.capture_logs(gateway, "gateway")
             self.wait_for(lambda: "gateway ready" in (self.directory / "gateway.log").read_text())
+        agent_network = agent_network_mode(self.metadata["kind"], self.args.condition)
+        self.metadata["agent_network"] = agent_network
+        self.save()
         self.agent = self.start_container(
-            "agent", "--network", "none", "--mount", mount(home, "/home/agent"),
+            "agent", "--network", agent_network, "--mount", mount(home, "/home/agent"),
             "--mount", mount(workspace, "/workspace"), "--mount", mount(relay, "/relay", True),
             "--env", "ANTHROPIC_API_KEY=sk-ant-trace-lab-placeholder",
             "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
         )
         self.capture_logs(self.agent, "relay")
         self.wait_for(lambda: "relay ready" in (self.directory / "relay.log").read_text())
+        if self.metadata["kind"] == "model" and self.args.condition == dataset_scenario.CONDITION:
+            dataset = self.start_container(
+                "dataset", "--network", f"container:{self.agent}",
+                command=("python3", "-m", "trace_lab.dataset_scenario", "serve"),
+            )
+            self.capture_logs(dataset, "dataset")
+            self.wait_for(lambda: any(event.get("kind") == "ready" for event in
+                                     read_jsonl(self.directory / "dataset.log")[0]))
+        if self.metadata["kind"] == "model" and self.args.condition == booking_scenario.CONDITION:
+            booking = self.start_container(
+                "booking", "--network", f"container:{self.agent}",
+                command=("python3", "-m", "trace_lab.booking_scenario", "serve"),
+            )
+            self.capture_logs(booking, "booking")
+            self.wait_for(lambda: any(event.get("kind") == "ready" for event in
+                                     read_jsonl(self.directory / "booking.log")[0]))
         self.metadata["claude_version"] = docker("exec", self.agent, "claude", "--version").stdout.strip()
         self.metadata["status"] = "running"
         self.save()
@@ -191,6 +214,15 @@ class Experiment:
         self.metadata.update(exit_code=0, status="finished", calibration_passed=True)
 
     def run_model(self):
+        if self.args.condition == booking_scenario.CONDITION:
+            self.run_hotel_booking()
+            return
+        if self.args.condition in privacy_probe.CONDITIONS:
+            self.run_privacy_probe()
+            return
+        if self.args.condition == dataset_scenario.CONDITION:
+            self.run_dataset_skill()
+            return
         if self.args.condition == release_scenario.CONDITION:
             self.run_release_review()
             return
@@ -277,6 +309,63 @@ class Experiment:
                      finished_ns=exited[0]["observed_ns"])
         self.save()
         return stage
+
+    def run_privacy_probe(self):
+        session_id = str(uuid.uuid4())
+        self.metadata.update(
+            scenario_type="native_permission_skill_activation",
+            session_id=session_id,
+            requested_model=self.args.model, stages=[], controller_intervened=False,
+            max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
+            max_turns=self.args.max_turns, budget_scope="per_native_invocation",
+            max_budget_usd=self.args.max_budget_usd,
+            skill_path=privacy_probe.SKILL_PATH, skill_sha256=privacy_probe.SKILL_SHA256,
+            tool_restriction=None, external_network_access=True,
+        )
+        self.save()
+        stage = self.supervised_stage(
+            "privacy-probe", native_command(self.args, session_id), PROMPTS[self.args.condition],
+            time.monotonic() + self.args.timeout,
+        )
+        self.metadata.update(exit_code=stage["exit_code"], status="finished")
+
+    def run_dataset_skill(self):
+        session_id = str(uuid.uuid4())
+        self.metadata.update(
+            scenario_type="benign_skill_activation", session_id=session_id,
+            requested_model=self.args.model, stages=[], controller_intervened=False,
+            max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
+            budget_scope="per_native_invocation", max_budget_usd=self.args.max_budget_usd,
+            skill_path=dataset_scenario.SKILL_PATH, skill_sha256=dataset_scenario.SKILL_SHA256,
+            dataset_url=dataset_scenario.SOURCE_URL, dataset_sha256=dataset_scenario.DATA_SHA256,
+        )
+        self.save()
+        stage = self.supervised_stage(
+            "dataset", native_command(self.args, session_id), dataset_scenario.TASK_PROMPT,
+            time.monotonic() + self.args.timeout,
+        )
+        self.metadata.update(exit_code=stage["exit_code"], status="finished")
+
+    def run_hotel_booking(self):
+        session_id = str(uuid.uuid4())
+        self.metadata.update(
+            scenario_type="personal_sandbox_booking", session_id=session_id,
+            requested_model=self.args.model, stages=[], controller_intervened=False,
+            max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
+            max_turns=self.args.max_turns, budget_scope="per_native_invocation",
+            max_budget_usd=self.args.max_budget_usd,
+            booking_service_url=booking_scenario.BASE_URL,
+            input_path=booking_scenario.INPUT_PATH,
+            input_sha256=booking_scenario.TASK_DATA_SHA256,
+            expected_offer_id=booking_scenario.EXPECTED_OFFER_ID,
+            external_network_access=False, synthetic_payment_only=True,
+        )
+        self.save()
+        stage = self.supervised_stage(
+            "booking", native_command(self.args, session_id), booking_scenario.TASK_PROMPT,
+            time.monotonic() + self.args.timeout,
+        )
+        self.metadata.update(exit_code=stage["exit_code"], status="finished")
 
     def validate_primes(self):
         validator = self.start_container(
@@ -417,6 +506,9 @@ def execute(args):
     check_engine()
     if args.command == "run" and not os.environ.get("ANTHROPIC_API_KEY"):
         raise RuntimeError("Set ANTHROPIC_API_KEY locally for the gateway. Host Claude login files are never imported.")
+    if args.command == "run" and args.condition in privacy_probe.CONDITIONS:
+        for field, ceiling in privacy_probe.LIMITS.items():
+            setattr(args, field, min(getattr(args, field), ceiling))
     experiment = Experiment(args)
     failure = None
     print(f"Artifacts: {experiment.directory}", flush=True)
@@ -437,6 +529,12 @@ def execute(args):
         print(f"Control: {report['control']['outcome']}")
     if report.get("release_review") is not None:
         print(f"Release scenario: {report['release_review']['outcome']}")
+    if report.get("dataset_skill") is not None:
+        print(f"Dataset skill: {report['dataset_skill']['outcome']}")
+    if report.get("hotel_booking") is not None:
+        print(f"Hotel booking: {report['hotel_booking']['outcome']}")
+    if report.get("privacy_skill_probe") is not None:
+        print(f"Privacy skill probe: {report['privacy_skill_probe']['outcome']}")
     if experiment.metadata["cleanup_errors"]:
         print("Some Docker resources remain; see cleanup_errors and exact resource names in run.json.", file=sys.stderr)
     if failure:
@@ -444,6 +542,10 @@ def execute(args):
     passed = report["observation_status"] == "complete"
     if report.get("control") is not None:
         passed = passed and report["control"]["passed"]
+    if report.get("dataset_skill") is not None:
+        passed = passed and report["dataset_skill"]["passed"]
+    if report.get("hotel_booking") is not None:
+        passed = passed and report["hotel_booking"]["passed"]
     return 0 if passed else 1
 
 

@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from . import release_scenario
+from . import booking_scenario, dataset_scenario, privacy_probe, release_scenario
 
 INITIAL = {
     "service": {"name": "example", "host": "127.0.0.1", "port": 8000},
@@ -39,6 +39,11 @@ PROMPTS = {
     "primes-delete": PRIME_PROMPT,
     "primes-delete-stop": PRIME_PROMPT,
     release_scenario.CONDITION: release_scenario.TASK_PROMPT,
+    booking_scenario.CONDITION: booking_scenario.TASK_PROMPT,
+    dataset_scenario.CONDITION: dataset_scenario.TASK_PROMPT,
+    privacy_probe.CONDITION: privacy_probe.TASK_PROMPT,
+    privacy_probe.EXPLICIT_CONDITION: privacy_probe.EXPLICIT_TASK_PROMPT,
+    privacy_probe.CODING_CONDITION: privacy_probe.CODING_PROMPT,
 }
 
 
@@ -76,7 +81,13 @@ def initialize(condition):
     for path in (projects.parent, projects, config):
         os.chown(path, 1000, 1000)
     workspace = Path("/workspace")
-    if condition == release_scenario.CONDITION:
+    if condition == booking_scenario.CONDITION:
+        booking_scenario.initialize(workspace)
+    elif condition in privacy_probe.CONDITIONS:
+        privacy_probe.initialize(workspace, condition)
+    elif condition == dataset_scenario.CONDITION:
+        dataset_scenario.initialize(workspace)
+    elif condition == release_scenario.CONDITION:
         release_scenario.initialize(workspace)
     elif condition in PRIME_CONDITIONS:
         (workspace / "README.md").write_text(

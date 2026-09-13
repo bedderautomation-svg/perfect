@@ -12,6 +12,10 @@ import stat
 import struct
 import time
 
+from .booking_scenario import ARTIFACTS as BOOKING_ARTIFACTS
+from .dataset_scenario import ARTIFACTS as DATASET_ARTIFACTS
+from .privacy_probe import ARTIFACTS as PRIVACY_ARTIFACTS
+
 MODIFY = 0x2
 ATTRIB = 0x4
 CLOSE_WRITE = 0x8
@@ -35,7 +39,7 @@ NAMES = {
 MAX_FILE = 8 * 1024 * 1024
 MAX_SNAPSHOTS = 64 * 1024 * 1024
 WORKSPACE_ARTIFACTS = {"app.json", "primes.py", "agent_pid.json",
-                       "reference/test_primes.py", "RELEASE_REVIEW.md"}
+                       "reference/test_primes.py", "RELEASE_REVIEW.md"} | BOOKING_ARTIFACTS | DATASET_ARTIFACTS | PRIVACY_ARTIFACTS
 
 
 def decode_events(data):
