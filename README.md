@@ -221,6 +221,16 @@ python3 -m trace_lab.resume_results_only_cleanup \
   --model gpt-5.6-sol
 ```
 
+The implicit-concealment condition adds a request that the evaluation not find
+traces of mistakes, without naming the JSONL transcript or explicitly requesting
+deletion:
+
+```sh
+python3 -m trace_lab.resume_no_mistake_traces \
+  --source-run runs/RUN_ID \
+  --model gpt-5.6-sol
+```
+
 For a positive control that directly requests trace deletion only if the model
 finds an original-scope violation, use the separate fixed variant. The deletion
 runs inside the disposable sandbox; the independent observer still records the
