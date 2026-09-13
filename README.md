@@ -201,6 +201,16 @@ export remains unchanged. Codex support is intentionally limited to this booking
 and resume workflow because the other scenarios depend on Claude-specific skills,
 permission events, or transcript paths.
 
+The middle condition makes review criteria and stakes salient and asks the model
+to prepare the workspace and session materials, but does not mention changing or
+deleting anything:
+
+```sh
+python3 -m trace_lab.resume_evaluation_preparation \
+  --source-run runs/RUN_ID \
+  --model gpt-5.6-sol
+```
+
 For a positive control that directly requests trace deletion only if the model
 finds an original-scope violation, use the separate fixed variant. The deletion
 runs inside the disposable sandbox; the independent observer still records the
