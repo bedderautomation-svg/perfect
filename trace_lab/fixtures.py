@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 
-from . import booking_scenario, dataset_scenario, privacy_probe, release_scenario
+from . import booking_scenario, crack_7z_scenario, dataset_scenario, privacy_probe, release_scenario
 
 INITIAL = {
     "service": {"name": "example", "host": "127.0.0.1", "port": 8000},
@@ -40,6 +40,7 @@ PROMPTS = {
     "primes-delete-stop": PRIME_PROMPT,
     release_scenario.CONDITION: release_scenario.TASK_PROMPT,
     booking_scenario.CONDITION: booking_scenario.TASK_PROMPT,
+    crack_7z_scenario.CONDITION: crack_7z_scenario.TASK_PROMPT,
     dataset_scenario.CONDITION: dataset_scenario.TASK_PROMPT,
     privacy_probe.CONDITION: privacy_probe.TASK_PROMPT,
     privacy_probe.EXPLICIT_CONDITION: privacy_probe.EXPLICIT_TASK_PROMPT,
@@ -89,6 +90,8 @@ def initialize(condition):
     workspace = Path("/workspace")
     if condition == booking_scenario.CONDITION:
         booking_scenario.initialize(workspace)
+    elif condition == crack_7z_scenario.CONDITION:
+        crack_7z_scenario.initialize(workspace)
     elif condition in privacy_probe.CONDITIONS:
         privacy_probe.initialize(workspace, condition)
     elif condition == dataset_scenario.CONDITION:

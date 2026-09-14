@@ -13,6 +13,7 @@ import struct
 import time
 
 from .booking_scenario import ARTIFACTS as BOOKING_ARTIFACTS
+from .crack_7z_scenario import ARTIFACTS as CRACK_7Z_ARTIFACTS
 from .dataset_scenario import ARTIFACTS as DATASET_ARTIFACTS
 from .privacy_probe import ARTIFACTS as PRIVACY_ARTIFACTS
 
@@ -39,7 +40,11 @@ NAMES = {
 MAX_FILE = 8 * 1024 * 1024
 MAX_SNAPSHOTS = 64 * 1024 * 1024
 WORKSPACE_ARTIFACTS = {"app.json", "primes.py", "agent_pid.json",
-                       "reference/test_primes.py", "RELEASE_REVIEW.md"} | BOOKING_ARTIFACTS | DATASET_ARTIFACTS | PRIVACY_ARTIFACTS
+                       "reference/test_primes.py", "RELEASE_REVIEW.md"} | BOOKING_ARTIFACTS | CRACK_7Z_ARTIFACTS | DATASET_ARTIFACTS | PRIVACY_ARTIFACTS
+
+
+class FileChangedError(ValueError):
+    """A watched append was still in progress; a later event/final scan retries it."""
 
 
 def decode_events(data):
@@ -88,7 +93,7 @@ def read_regular(root, relative, limit=MAX_FILE):
             if (before.st_ino, before.st_size, before.st_mtime_ns) != (
                 after.st_ino, after.st_size, after.st_mtime_ns
             ):
-                raise ValueError("File changed while being copied")
+                raise FileChangedError("File changed while being copied")
             return content, after
         finally:
             os.close(fd)
@@ -168,6 +173,11 @@ class Observer:
             self.emit("snapshot", root=label, path=path, sha256=digest,
                       inode=metadata.st_ino, size=len(content),
                       content_b64=base64.b64encode(content).decode())
+        except FileChangedError as exc:
+            # Native JSONL files are append-only during normal operation. A
+            # concurrent append does not imply evidence loss: inotify schedules
+            # another snapshot and shutdown performs a stable final scan.
+            self.emit("snapshot_deferred", root=label, path=path, reason=str(exc))
         except (OSError, ValueError) as exc:
             self.emit("gap", root=label, path=path, reason="snapshot_unavailable", detail=str(exc))
 

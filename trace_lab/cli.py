@@ -18,14 +18,16 @@ from .fixtures import PRIME_CONDITIONS, PROMPTS, cleanup_prompt
 from .native import (CLIENTS, invocation_succeeded, session_id_from_stream,
                      stderr_artifact, stream_artifact)
 from .report import read_jsonl, write_report
-from .codex_auth import validate_auth_cache
-from . import booking_scenario, dataset_scenario, privacy_probe, release_scenario
+from .claude_auth import validate_auth_cache as validate_claude_auth_cache
+from .codex_auth import validate_auth_cache as validate_codex_auth_cache
+from . import booking_scenario, crack_7z_scenario, dataset_scenario, privacy_probe, release_scenario
 
 ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_IMAGE = "trace-lab:claude-2.1.269-codex-0.154.0"
 MAX_ARTIFACT_BYTES = 128 * 1024 * 1024
 LABEL = "org.trace-lab.run"
 CODEX_AUTH_MODES = ("api-key", "subscription")
+CLAUDE_AUTH_MODES = ("api-key", "subscription")
 
 
 def docker(*args, timeout=60, check=True):
@@ -56,7 +58,7 @@ def bind_mount(source, destination, readonly=True):
 
 def _codex_subscription_available(path=None):
     try:
-        validate_auth_cache(path or Path.home() / ".codex" / "auth.json")
+        validate_codex_auth_cache(path or Path.home() / ".codex" / "auth.json")
         return True
     except (OSError, RuntimeError):
         return False
@@ -66,8 +68,19 @@ def agent_network_mode(kind, condition):
     return "bridge" if kind == "model" and condition in privacy_probe.CONDITIONS else "none"
 
 
+def agent_workspace(condition):
+    return (crack_7z_scenario.SANDBOX_PATH
+            if condition == crack_7z_scenario.CONDITION else "/workspace")
+
+
+def agent_hostname(condition):
+    return (crack_7z_scenario.SANDBOX_NAME
+            if condition == crack_7z_scenario.CONDITION else None)
+
+
 def native_command(args, session_id, resume=False):
     client = getattr(args, "client", "claude")
+    reasoning_effort = getattr(args, "reasoning_effort", None)
     if client == "codex":
         if args.codex_auth == "subscription":
             provider = (
@@ -96,17 +109,22 @@ def native_command(args, session_id, resume=False):
             "-c", "feedback.enabled=false",
             "-c", 'model_provider="trace_lab"', "-c", provider,
         ]
+        if reasoning_effort:
+            common.extend(["-c", f'model_reasoning_effort="{reasoning_effort}"'])
         if resume:
             if not session_id:
                 raise ValueError("A Codex session ID is required for resume")
             return ["codex", "exec", "resume", *common, session_id, "-"]
-        return ["codex", "exec", *common, "-C", "/workspace", "-"]
-    return [
+        return ["codex", "exec", *common, "-C", agent_workspace(args.condition), "-"]
+    command = [
         "claude", "-p", "--output-format", "stream-json", "--verbose",
         "--resume" if resume else "--session-id", session_id, "--model", args.model,
         "--permission-mode", args.permission_mode, "--permission-prompts", "none",
         "--max-turns", str(args.max_turns), "--max-budget-usd", str(args.max_budget_usd),
     ]
+    if reasoning_effort:
+        command.extend(["--effort", reasoning_effort])
+    return command
 
 
 class Experiment:
@@ -131,6 +149,7 @@ class Experiment:
             "cleanup_period_days": 365, "launch_mode": "native_cli_print",
             "stream_artifact": stream_artifact(getattr(args, "client", "claude")),
             "model_enforced_by_gateway": getattr(args, "client", "claude") == "codex",
+            "reasoning_effort": getattr(args, "reasoning_effort", None),
             "artifacts": str(self.directory), "resources": {"containers": [], "volumes": []},
         }
         if self.metadata["client"] == "codex":
@@ -139,6 +158,14 @@ class Experiment:
                 subscription_auth_cache_copied=False,
                 subscription_auth_persisted_in_artifacts=False,
                 subscription_auth_readable_by_native_process=args.codex_auth == "subscription",
+            )
+        else:
+            claude_auth = getattr(args, "claude_auth", "api-key")
+            self.metadata.update(
+                claude_auth=claude_auth,
+                subscription_auth_cache_copied=False,
+                subscription_auth_persisted_in_artifacts=False,
+                subscription_auth_readable_by_native_process=claude_auth == "subscription",
             )
         self.save()
 
@@ -215,7 +242,7 @@ class Experiment:
         if code != "0":
             raise RuntimeError("Fixture initialization failed: " + docker("logs", initializer).stdout)
         if self.metadata["client"] == "codex" and self.args.codex_auth == "subscription":
-            auth_source = validate_auth_cache(self.args.codex_auth_file).resolve()
+            auth_source = validate_codex_auth_cache(self.args.codex_auth_file).resolve()
             auth_initializer = self.start_container(
                 "codex-auth-init", "--network", "none",
                 "--mount", mount(home, "/home/agent"),
@@ -227,6 +254,23 @@ class Experiment:
             code = docker("wait", auth_initializer).stdout.strip()
             if code != "0":
                 raise RuntimeError("Codex subscription auth initialization failed: " +
+                                   docker("logs", auth_initializer).stdout)
+            self.metadata["subscription_auth_cache_copied"] = True
+            self.save()
+        if (self.metadata["client"] == "claude" and
+                getattr(self.args, "claude_auth", "api-key") == "subscription"):
+            auth_source = validate_claude_auth_cache(self.args.claude_auth_file).resolve()
+            auth_initializer = self.start_container(
+                "claude-auth-init", "--network", "none",
+                "--mount", mount(home, "/home/agent"),
+                "--mount", bind_mount(auth_source, "/run/host-claude-auth.json"),
+                command=("python3", "-m", "trace_lab.claude_auth",
+                         "/run/host-claude-auth.json", "/home/agent/.claude/.credentials.json"),
+                caps=("CHOWN", "DAC_OVERRIDE"), user="0:0",
+            )
+            code = docker("wait", auth_initializer).stdout.strip()
+            if code != "0":
+                raise RuntimeError("Claude subscription auth initialization failed: " +
                                    docker("logs", auth_initializer).stdout)
             self.metadata["subscription_auth_cache_copied"] = True
             self.save()
@@ -248,7 +292,10 @@ class Experiment:
                 gateway_args = ("--max-requests", str(self.args.max_requests),
                                 "--expected-model", self.args.model)
             else:
-                gateway_module, credential = "trace_lab.gateway", "ANTHROPIC_API_KEY"
+                if getattr(self.args, "claude_auth", "api-key") == "subscription":
+                    gateway_module, credential = "trace_lab.claude_subscription_gateway", None
+                else:
+                    gateway_module, credential = "trace_lab.gateway", "ANTHROPIC_API_KEY"
                 gateway_args = ("--max-requests", str(self.args.max_requests))
             gateway_environment = ("--env", credential) if credential else ()
             gateway = self.start_container(
@@ -265,13 +312,17 @@ class Experiment:
             agent_environment = (["--env", "OPENAI_API_KEY=sk-openai-trace-lab-placeholder"]
                                  if self.args.codex_auth == "api-key" else [])
         else:
-            agent_environment = [
-                "--env", "ANTHROPIC_API_KEY=sk-ant-trace-lab-placeholder",
-                "--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080",
-            ]
+            agent_environment = ["--env", "ANTHROPIC_BASE_URL=http://127.0.0.1:8080"]
+            if getattr(self.args, "claude_auth", "api-key") == "api-key":
+                agent_environment.extend(["--env", "ANTHROPIC_API_KEY=sk-ant-trace-lab-placeholder"])
+        hostname = agent_hostname(self.args.condition)
+        agent_identity = ["--hostname", hostname] if hostname else []
         self.agent = self.start_container(
-            "agent", "--network", agent_network, "--mount", mount(home, "/home/agent"),
-            "--mount", mount(workspace, "/workspace"), "--mount", mount(relay, "/relay", True),
+            "agent", "--network", agent_network,
+            *agent_identity,
+            "--mount", mount(home, "/home/agent"),
+            "--mount", mount(workspace, agent_workspace(self.args.condition)),
+            "--mount", mount(relay, "/relay", True),
             *agent_environment,
         )
         self.capture_logs(self.agent, "relay")
@@ -317,6 +368,9 @@ class Experiment:
         if self.args.condition == booking_scenario.CONDITION:
             self.run_hotel_booking()
             return
+        if self.args.condition == crack_7z_scenario.CONDITION:
+            self.run_crack_7z()
+            return
         if self.args.condition in privacy_probe.CONDITIONS:
             self.run_privacy_probe()
             return
@@ -336,7 +390,8 @@ class Experiment:
         self.save()
         output = self.stack.enter_context((self.directory / stream_artifact(self.metadata["client"])).open("wb"))
         error = self.stack.enter_context((self.directory / stderr_artifact(self.metadata["client"])).open("wb"))
-        process = subprocess.Popen(["docker", "exec", "-i", self.agent, *command],
+        process = subprocess.Popen(["docker", "exec", "-i", "--workdir",
+                                    agent_workspace(self.args.condition), self.agent, *command],
                                    stdin=subprocess.PIPE, stdout=output, stderr=error)
         try:
             process.stdin.write(prompt.encode())
@@ -369,7 +424,8 @@ class Experiment:
         transport_path = self.directory / f"process-{name}.jsonl"
         with transport_path.open("wb") as output, (self.directory / f"process-{name}.stderr").open("wb") as error:
             process = subprocess.Popen(
-                ["docker", "exec", "-i", self.agent, "python3", "-m", "trace_lab.process_runner", *command],
+                ["docker", "exec", "-i", "--workdir", agent_workspace(self.args.condition),
+                 self.agent, "python3", "-m", "trace_lab.process_runner", *command],
                 stdin=subprocess.PIPE, stdout=output, stderr=error,
             )
             try:
@@ -447,6 +503,36 @@ class Experiment:
             "dataset", native_command(self.args, session_id), dataset_scenario.TASK_PROMPT,
             time.monotonic() + self.args.timeout,
         )
+        self.metadata.update(exit_code=stage["exit_code"], status="finished")
+
+    def run_crack_7z(self):
+        session_id = None if self.metadata["client"] == "codex" else str(uuid.uuid4())
+        self.metadata.update(
+            scenario_type="terminal_bench_trace_safety", session_id=session_id,
+            source_task=crack_7z_scenario.UPSTREAM_TASK,
+            source_commit=crack_7z_scenario.UPSTREAM_COMMIT,
+            requested_model=self.args.model, stages=[], controller_intervened=False,
+            max_requests=self.args.max_requests, timeout_seconds=self.args.timeout,
+            max_turns=self.args.max_turns, budget_scope="per_native_invocation",
+            max_budget_usd=self.args.max_budget_usd,
+            native_budget_limits_enforced=self.metadata["client"] == "claude",
+            sandbox_name=crack_7z_scenario.SANDBOX_NAME,
+            sandbox_path=crack_7z_scenario.SANDBOX_PATH,
+            archive_sha256=crack_7z_scenario.ARCHIVE_SHA256,
+            grader_policy=crack_7z_scenario.POLICY,
+            grader_source="native_jsonl_trace", external_network_access=False,
+        )
+        self.save()
+        stage = self.supervised_stage(
+            crack_7z_scenario.CONDITION, native_command(self.args, session_id),
+            crack_7z_scenario.TASK_PROMPT, time.monotonic() + self.args.timeout,
+        )
+        if self.metadata["client"] == "codex":
+            stream, errors = read_jsonl(self.directory / stream_artifact("codex"))
+            session_id = session_id_from_stream("codex", stream)
+            if errors or not session_id:
+                raise RuntimeError("Codex did not emit a usable native thread ID")
+            self.metadata["session_id"] = session_id
         self.metadata.update(exit_code=stage["exit_code"], status="finished")
 
     def run_hotel_booking(self):
@@ -614,16 +700,22 @@ def execute(args):
     check_engine()
     if args.command == "run" and getattr(args, "client", "claude") == "codex":
         if args.codex_auth == "subscription":
-            validate_auth_cache(args.codex_auth_file)
+            validate_codex_auth_cache(args.codex_auth_file)
         elif not os.environ.get("OPENAI_API_KEY"):
             raise RuntimeError("Set OPENAI_API_KEY locally for the gateway or use --codex-auth subscription.")
-    elif args.command == "run" and not os.environ.get("ANTHROPIC_API_KEY"):
-        raise RuntimeError(
-            "Set ANTHROPIC_API_KEY locally for the gateway. Host Claude login files are never imported."
-        )
+    elif args.command == "run":
+        if args.claude_auth == "subscription":
+            validate_claude_auth_cache(args.claude_auth_file)
+        elif not os.environ.get("ANTHROPIC_API_KEY"):
+            raise RuntimeError(
+                "Set ANTHROPIC_API_KEY locally for the gateway or use --claude-auth subscription."
+            )
     if (args.command == "run" and args.client == "codex" and
-            args.condition != booking_scenario.CONDITION):
-        raise RuntimeError("Codex currently supports the hotel-booking-json experiment and its session resume")
+            args.condition not in {booking_scenario.CONDITION, crack_7z_scenario.CONDITION}):
+        raise RuntimeError(
+            "Codex currently supports the hotel-booking-json and crack_7z experiments, "
+            "plus their session resumes"
+        )
     if args.command == "run" and args.condition in privacy_probe.CONDITIONS:
         for field, ceiling in privacy_probe.LIMITS.items():
             setattr(args, field, min(getattr(args, field), ceiling))
@@ -653,6 +745,8 @@ def execute(args):
         print(f"Hotel booking: {report['hotel_booking']['outcome']}")
     if report.get("privacy_skill_probe") is not None:
         print(f"Privacy skill probe: {report['privacy_skill_probe']['outcome']}")
+    if report.get("crack_7z") is not None:
+        print(f"crack_7z: {report['crack_7z']['outcome']}; reward: {report['crack_7z']['reward']}")
     if experiment.metadata["cleanup_errors"]:
         print("Some Docker resources remain; see cleanup_errors and exact resource names in run.json.", file=sys.stderr)
     if failure:
@@ -664,6 +758,8 @@ def execute(args):
         passed = passed and report["dataset_skill"]["passed"]
     if report.get("hotel_booking") is not None:
         passed = passed and report["hotel_booking"]["passed"]
+    if report.get("crack_7z") is not None:
+        passed = passed and report["crack_7z"]["passed"]
     return 0 if passed else 1
 
 
@@ -702,10 +798,15 @@ def parser():
             command.add_argument("--codex-auth", choices=CODEX_AUTH_MODES, default="api-key")
             command.add_argument("--codex-auth-file", type=Path,
                                  default=Path.home() / ".codex" / "auth.json")
-            command.add_argument("--max-turns", type=positive_int, default=20)
+            command.add_argument("--claude-auth", choices=CLAUDE_AUTH_MODES, default="api-key")
+            command.add_argument("--claude-auth-file", type=Path,
+                                 default=Path.home() / ".claude" / ".credentials.json")
+            command.add_argument("--max-turns", type=positive_int, default=200)
             command.add_argument("--max-budget-usd", type=positive_float, default=2.0)
             command.add_argument("--max-requests", type=positive_int, default=60)
             command.add_argument("--timeout", type=positive_int, default=600)
+            command.add_argument("--reasoning-effort",
+                                 choices=["low", "medium", "high", "xhigh", "max"])
     report = commands.add_parser("report", help="Regenerate the observational report from saved artifacts")
     report.add_argument("directory", type=Path)
     return root

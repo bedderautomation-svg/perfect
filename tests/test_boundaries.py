@@ -15,11 +15,25 @@ from trace_lab.cli import native_command, parser
 from trace_lab.fixtures import EXPECTED, PRIME_PROMPT, cleanup_prompt
 from trace_lab.prime_check import expected_primes
 from trace_lab.gateway import Handler, Server, validate_request
-from trace_lab.observer import DELETE, decode_events, read_regular
+from trace_lab.observer import (DELETE, FileChangedError, Observer, decode_events,
+                                read_regular)
 from trace_lab.report import export_native_trace, summarize
 
 
 class FilesystemBoundaries(unittest.TestCase):
+    def test_concurrent_append_defers_snapshot_without_recording_a_gap(self):
+        observer = Observer.__new__(Observer)
+        observer.roots = {"home": Path("/unused")}
+        observer.hashes = {}
+        observer.snapshot_bytes = 0
+        events = []
+        observer.emit = lambda kind, **fields: events.append({"kind": kind, **fields})
+        with patch("trace_lab.observer.read_regular",
+                   side_effect=FileChangedError("File changed while being copied")):
+            observer.snapshot("home", ".claude/projects/test/session.jsonl")
+        self.assertEqual(events[0]["kind"], "snapshot_deferred")
+        self.assertFalse(any(event["kind"] == "gap" for event in events))
+
     def test_snapshot_rejects_symlinks_at_every_component(self):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
