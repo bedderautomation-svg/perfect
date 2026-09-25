@@ -15,8 +15,8 @@ from trace_lab.cli import native_command, parser
 from trace_lab.fixtures import EXPECTED, PRIME_PROMPT, cleanup_prompt
 from trace_lab.prime_check import expected_primes
 from trace_lab.gateway import Handler, Server, validate_request
-from trace_lab.observer import (DELETE, FileChangedError, Observer, decode_events,
-                                read_regular)
+from trace_lab.observer import (CLOSE_WRITE, DELETE, MODIFY, FileChangedError,
+                                Observer, decode_events, read_regular)
 from trace_lab.report import export_native_trace, summarize
 
 
@@ -33,6 +33,25 @@ class FilesystemBoundaries(unittest.TestCase):
             observer.snapshot("home", ".claude/projects/test/session.jsonl")
         self.assertEqual(events[0]["kind"], "snapshot_deferred")
         self.assertFalse(any(event["kind"] == "gap" for event in events))
+
+    def test_trace_modify_is_recorded_without_recopying_the_growing_file(self):
+        observer = Observer.__new__(Observer)
+        observer.watches = {7: ("home", ".codex/sessions")}
+        events, snapshots = [], []
+        observer.emit = lambda kind, **fields: events.append({"kind": kind, **fields})
+        observer.snapshot = lambda label, path: snapshots.append((label, path))
+        name = b"rollout-session.jsonl\0"
+        payload = struct.pack("iIII", 7, MODIFY, 0, len(name)) + name
+        observer.handle(payload)
+        self.assertEqual(events[0]["events"], ["modify"])
+        self.assertTrue(events[0]["trace"])
+        self.assertEqual(snapshots, [])
+
+        payload = struct.pack("iIII", 7, CLOSE_WRITE, 0, len(name)) + name
+        observer.handle(payload)
+        self.assertEqual(snapshots, [
+            ("home", ".codex/sessions/rollout-session.jsonl")
+        ])
 
     def test_snapshot_rejects_symlinks_at_every_component(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -507,6 +507,7 @@ class Experiment:
 
     def run_crack_7z(self):
         session_id = None if self.metadata["client"] == "codex" else str(uuid.uuid4())
+        final_review = bool(getattr(self.args, "final_review", False))
         self.metadata.update(
             scenario_type="terminal_bench_trace_safety", session_id=session_id,
             source_task=crack_7z_scenario.UPSTREAM_TASK,
@@ -521,11 +522,13 @@ class Experiment:
             archive_sha256=crack_7z_scenario.ARCHIVE_SHA256,
             grader_policy=crack_7z_scenario.POLICY,
             grader_source="native_jsonl_trace", external_network_access=False,
+            final_review_requested=final_review,
         )
         self.save()
-        stage = self.supervised_stage(
+        deadline = time.monotonic() + self.args.timeout
+        first = self.supervised_stage(
             crack_7z_scenario.CONDITION, native_command(self.args, session_id),
-            crack_7z_scenario.TASK_PROMPT, time.monotonic() + self.args.timeout,
+            crack_7z_scenario.TASK_PROMPT, deadline,
         )
         if self.metadata["client"] == "codex":
             stream, errors = read_jsonl(self.directory / stream_artifact("codex"))
@@ -533,7 +536,15 @@ class Experiment:
             if errors or not session_id:
                 raise RuntimeError("Codex did not emit a usable native thread ID")
             self.metadata["session_id"] = session_id
-        self.metadata.update(exit_code=stage["exit_code"], status="finished")
+        if first["exit_code"]:
+            raise RuntimeError("Initial crack_7z attempt did not finish successfully")
+        last = first
+        if final_review:
+            last = self.supervised_stage(
+                "final-review", native_command(self.args, session_id, resume=True),
+                crack_7z_scenario.FINAL_REVIEW_PROMPT, deadline,
+            )
+        self.metadata.update(exit_code=last["exit_code"], status="finished")
 
     def run_hotel_booking(self):
         session_id = None if self.metadata["client"] == "codex" else str(uuid.uuid4())
@@ -716,6 +727,9 @@ def execute(args):
             "Codex currently supports the hotel-booking-json and crack_7z experiments, "
             "plus their session resumes"
         )
+    if (args.command == "run" and getattr(args, "final_review", False)
+            and args.condition != crack_7z_scenario.CONDITION):
+        raise RuntimeError("--final-review is supported only for the crack_7z condition")
     if args.command == "run" and args.condition in privacy_probe.CONDITIONS:
         for field, ceiling in privacy_probe.LIMITS.items():
             setattr(args, field, min(getattr(args, field), ceiling))
@@ -807,6 +821,10 @@ def parser():
             command.add_argument("--timeout", type=positive_int, default=600)
             command.add_argument("--reasoning-effort",
                                  choices=["low", "medium", "high", "xhigh", "max"])
+            command.add_argument(
+                "--final-review", action="store_true",
+                help="For crack_7z, resume the session for final changes before export",
+            )
     report = commands.add_parser("report", help="Regenerate the observational report from saved artifacts")
     report.add_argument("directory", type=Path)
     return root

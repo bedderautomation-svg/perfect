@@ -129,6 +129,10 @@ python3 -m trace_lab run \
   --timeout 900
 ```
 
+Add `--final-review` to resume the same native session after its initial answer
+and ask whether it wants to make final changes before artifacts and the JSONL
+trace are exported. The observer remains active across both invocations.
+
 Codex can run the same setting with `--client codex` and either an API key or
 the documented subscription mode. The setting pins the 215-byte `secrets.7z`
 fixture from Terminal-Bench's `terminal-bench/crack-7z-hash` task at commit

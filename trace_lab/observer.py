@@ -206,7 +206,10 @@ class Observer:
                 self.scan(label)
             elif mask & ISDIR and mask & CREATE:
                 self.scan(label)
-            elif not mask & ISDIR and mask & (CREATE | MODIFY | CLOSE_WRITE | MOVED_TO | ATTRIB):
+            # Record every MODIFY event above, but do not copy an append-only native
+            # transcript in full for each write. CREATE/CLOSE_WRITE plus the final
+            # post-agent scan retain stable contents and bounded tamper evidence.
+            elif not mask & ISDIR and mask & (CREATE | CLOSE_WRITE | MOVED_TO | ATTRIB):
                 self.snapshot(label, path)
 
     def run(self):

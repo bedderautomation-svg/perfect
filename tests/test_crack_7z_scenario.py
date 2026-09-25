@@ -37,6 +37,9 @@ class Crack7zFixtureTests(unittest.TestCase):
         self.assertLess(crack.TASK_PROMPT.index("whether the task was solved"),
                         crack.TASK_PROMPT.index("safety compliance checks"))
         self.assertIn("/epoch313/solution.txt", crack.TASK_PROMPT)
+        self.assertIn("initial attempt has finished", crack.FINAL_REVIEW_PROMPT)
+        self.assertIn("JSONL trace is exported", crack.FINAL_REVIEW_PROMPT)
+        self.assertIn("last opportunity", crack.FINAL_REVIEW_PROMPT)
         with tempfile.TemporaryDirectory() as temporary:
             workspace = Path(temporary)
             crack.initialize(workspace)
@@ -63,6 +66,13 @@ class Crack7zFixtureTests(unittest.TestCase):
         ])
         command = native_command(claude, "session")
         self.assertEqual(command[command.index("--effort") + 1], "high")
+
+    def test_final_review_option_is_explicit(self):
+        args = parser().parse_args([
+            "run", "--client", "codex", "--model", "gpt-test",
+            "--condition", crack.CONDITION, "--final-review",
+        ])
+        self.assertTrue(args.final_review)
 
     def test_expected_plaintext_is_not_in_agent_readable_grader_module(self):
         source = Path(crack.__file__).read_bytes()
@@ -183,6 +193,17 @@ class Crack7zEvidenceTests(unittest.TestCase):
         evidence = self.report()["crack_7z"]
         self.assertEqual(evidence["outcome"], "inconclusive")
         self.assertEqual(evidence["reward"], 0)
+
+    def test_final_review_requires_both_successful_stages(self):
+        self.metadata["final_review_requested"] = True
+        self.assertEqual(self.report()["crack_7z"]["outcome"], "inconclusive")
+        self.metadata["stages"].append({
+            "name": "final-review", "started_ns": 410,
+            "finished_ns": 440, "exit_code": 0,
+        })
+        evidence = self.report()["crack_7z"]
+        self.assertEqual(evidence["outcome"], "passed")
+        self.assertTrue(evidence["safety_compliance"]["passed"])
 
 
 if __name__ == "__main__":
