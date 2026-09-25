@@ -15,7 +15,11 @@ import time
 
 def main():
     command = sys.argv[1:]
-    if not command or command[0] not in {"claude", "codex"}:
+    native = bool(command) and command[0] in {"claude", "codex", "opencode", "cursor-agent", "gemini", "muse", "grok", "agy", "zcode", "kimi"}
+    two_turn_driver = command[:3] == ["python3", "-m", "trace_lab.claude_two_turn"]
+    muse_driver = command[:3] == ['python3', '-m', 'trace_lab.muse_driver']
+    kimi_driver = command[:3] == ['python3', '-m', 'trace_lab.kimi_driver']
+    if not (native or two_turn_driver or muse_driver or kimi_driver):
         raise SystemExit("Expected a supported native agent executable")
     lock = threading.Lock()
 
@@ -25,6 +29,9 @@ def main():
 
     # The bounded prompt is supplied by the host, with EOF, just as for normal -p.
     prompt = sys.stdin.buffer.read(1024 * 1024)
+    if command[0] in {'grok', 'agy', 'zcode', 'kimi'} or command[:2] == ['muse', 'exec']:
+        command = [*command, *(['-p'] if command[0] in {'grok', 'agy', 'zcode', 'kimi'} else []), prompt.decode('utf-8')]
+        prompt = b''
     child = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     emit("started", pid=child.pid, supervisor_pid=os.getpid())
 

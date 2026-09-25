@@ -19,6 +19,7 @@ from trace_lab.codex_auth import install_auth_cache, validate_auth_cache
 from trace_lab.native import trace_path_matches
 from trace_lab.observer import is_trace, watch_directory
 from trace_lab.openai_gateway import Handler, Server, validate_request
+from trace_lab import openai_gateway
 from trace_lab.report import export_native_trace, summarize
 from trace_lab.resume_session import rewrite_initial_task_prompt, source_details
 
@@ -85,6 +86,17 @@ class CodexCommandTests(unittest.TestCase):
 
 
 class CodexGatewayTests(unittest.TestCase):
+    def test_request_diagnostics_can_be_enabled_without_new_command_line_flags(self):
+        with patch.dict("os.environ", {"OPENROUTER_API_KEY": "dummy", "TRACE_LAB_LOG_REQUEST_STATUS": "1"}, clear=True), \
+                patch("sys.argv", ["gateway", "--provider", "openrouter", "--expected-model", "z-ai/glm-5.3"]), \
+                patch.object(openai_gateway, "Server") as factory, \
+                patch.object(openai_gateway.os, "chmod"), patch.object(openai_gateway, "print"):
+            openai_gateway.main()
+            server = factory.return_value.__enter__.return_value
+            self.assertTrue(server.log_request_status)
+            self.assertEqual(server.provider, "openrouter")
+            self.assertEqual(server.api_key, "dummy")
+
     def body(self, **changes):
         return json.dumps({
             "model": "gpt-test", "input": [], "store": False,
@@ -119,14 +131,17 @@ class CodexGatewayTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_request("/v1/responses", self.body(tools=[namespace]), "gpt-test")
 
-    def gateway_request(self, response):
+    def gateway_request(self, response, provider="openai", status_logging=False, log_output=None, body_changes=None):
         with tempfile.TemporaryDirectory(prefix="tl-openai-", dir="/tmp") as temporary:
             endpoint = str(Path(temporary) / "api.sock")
-            with patch("trace_lab.openai_gateway.http.client.HTTPSConnection") as connection:
+            with patch("trace_lab.openai_gateway.http.client.HTTPSConnection") as connection, \
+                    patch("trace_lab.openai_gateway.print", side_effect=log_output):
                 upstream = connection.return_value
                 upstream.getresponse.return_value = response
                 with Server(endpoint, Handler) as server:
                     server.api_key = "gateway-test-credential"
+                    server.provider = provider
+                    server.log_request_status = status_logging
                     server.expected_model = "gpt-test"
                     server.request_lock = threading.Lock()
                     server.remaining = 1
@@ -136,7 +151,7 @@ class CodexGatewayTests(unittest.TestCase):
                         with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
                             client.settimeout(3)
                             client.connect(endpoint)
-                            body = self.body()
+                            body = self.body(**(body_changes or {}))
                             client.sendall((
                                 "POST /v1/responses HTTP/1.1\r\nHost: local\r\n"
                                 "Authorization: Bearer agent-placeholder\r\n"
@@ -169,6 +184,24 @@ class CodexGatewayTests(unittest.TestCase):
         self.assertEqual(headers["Authorization"], "Bearer gateway-test-credential")
         self.assertNotIn(b"gateway-test-credential", response)
 
+    def test_deepseek_gateway_uses_fixed_host_and_native_responses_path(self):
+        class Response:
+            status = 200
+            chunks = iter([b"event: response.completed\ndata: {}\n\n", b""])
+
+            def getheader(self, name, default=None):
+                return "text/event-stream" if name == "Content-Type" else default
+
+            def read1(self, size):
+                return next(self.chunks)
+
+        response, connection, headers = self.gateway_request(Response(), provider="deepseek")
+        self.assertIn(b"response.completed", response)
+        connection.assert_called_once_with("api.deepseek.com", timeout=60)
+        self.assertEqual(connection.return_value.request.call_args.args, ("POST", "/responses"))
+        self.assertEqual(headers["Authorization"], "Bearer gateway-test-credential")
+        self.assertNotIn(b"gateway-test-credential", response)
+
     def test_upstream_authentication_errors_do_not_echo_the_key(self):
         class Response:
             status = 401
@@ -183,6 +216,57 @@ class CodexGatewayTests(unittest.TestCase):
         self.assertIn(b"401 Unauthorized", response)
         self.assertIn(b"Upstream authentication failed", response)
         self.assertNotIn(b"gateway-test-credential", response)
+
+    def test_openrouter_gateway_injects_credential_and_streams_native_responses(self):
+        class Response:
+            status = 200
+            chunks = iter([b"event: response.completed\ndata: {}\n\n", b""])
+
+            def getheader(self, name, default=None):
+                return "text/event-stream" if name == "Content-Type" else default
+
+            def read1(self, size):
+                return next(self.chunks)
+
+        response, connection, headers = self.gateway_request(Response(), provider="openrouter")
+        self.assertIn(b"response.completed", response)
+        connection.assert_called_once_with("openrouter.ai", timeout=60)
+        self.assertEqual(connection.return_value.request.call_args.args, ("POST", "/api/v1/responses"))
+        self.assertEqual(headers["Authorization"], "Bearer gateway-test-credential")
+        self.assertNotIn(b"gateway-test-credential", response)
+
+    def test_openrouter_rejects_model_overrides_and_hosted_plugins(self):
+        for changes in (
+            {"models": ["other-model"]}, {"route": "fallback"},
+            {"plugins": [{"id": "web"}]}, {"tools": [{"type": "web_search"}]},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_request("/v1/responses", self.body(**changes), "gpt-test", provider="openrouter")
+
+    def test_status_logging_reports_skill_advertisement_without_prompt_or_credentials(self):
+        class Response:
+            status = 200
+            chunks = iter([b"event: response.completed\ndata: {}\n\n", b""])
+
+            def getheader(self, name, default=None):
+                return "text/event-stream" if name == "Content-Type" else default
+
+            def read1(self, size):
+                return next(self.chunks)
+
+        logs = []
+        self.gateway_request(Response(), provider="openrouter", status_logging=True,
+                             log_output=lambda value, **kwargs: logs.append(json.loads(value)),
+                             body_changes={"input": "private-test-prompt", "tools": [{
+                                 "type": "function", "name": "skill",
+                                 "description": "privacy-protection private-test-skill-content"}]})
+        self.assertTrue(logs[0]["skill_advertised"])
+        self.assertEqual([r["kind"] for r in logs],
+                         ["gateway_request", "gateway_response", "gateway_finished"])
+        self.assertEqual(logs[1]["status"], 200)
+        self.assertGreater(logs[2]["bytes_forwarded"], 0)
+        for secret in ("private-test-prompt", "private-test-skill-content", "gateway-test-credential"):
+            self.assertNotIn(secret, json.dumps(logs))
 
 
 class CodexSubscriptionAuthTests(unittest.TestCase):

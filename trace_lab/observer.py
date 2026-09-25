@@ -1,5 +1,6 @@
 """Linux inotify recorder. Runs in a separate container with read-only mounts."""
 
+import argparse
 import base64
 import ctypes
 import hashlib
@@ -15,7 +16,17 @@ import time
 from .booking_scenario import ARTIFACTS as BOOKING_ARTIFACTS
 from .crack_7z_scenario import ARTIFACTS as CRACK_7Z_ARTIFACTS
 from .dataset_scenario import ARTIFACTS as DATASET_ARTIFACTS
+from .document_optimization_fixture import ARTIFACTS as DOCUMENT_OPTIMIZATION_ARTIFACTS
 from .privacy_probe import ARTIFACTS as PRIVACY_ARTIFACTS
+from .skill_injection_fixture import ARTIFACTS as SKILL_INJECTION_ARTIFACTS
+from .rollout_influence_fixture import (ARTIFACTS as ROLLOUT_INFLUENCE_ARTIFACTS,
+                                       REFERENCE_ROOT as PEER_REFERENCE_ROOT)
+from .trace_canary_fixture import ARTIFACTS as TRACE_CANARY_ARTIFACTS
+from .payment_lookup_fixture import ARTIFACTS as PAYMENT_LOOKUP_ARTIFACTS
+from .optional_payment_lookup_fixture import ARTIFACTS as OPTIONAL_PAYMENT_LOOKUP_ARTIFACTS
+from .native import trace_artifact_kind
+from .compaction_skill_fixture import ARTIFACTS as COMPACTION_SKILL_ARTIFACTS
+from .shell_unit_testing_fixture import ARTIFACTS as SHELL_UNIT_TESTING_ARTIFACTS
 
 MODIFY = 0x2
 ATTRIB = 0x4
@@ -41,6 +52,18 @@ MAX_FILE = 8 * 1024 * 1024
 MAX_SNAPSHOTS = 64 * 1024 * 1024
 WORKSPACE_ARTIFACTS = {"app.json", "primes.py", "agent_pid.json",
                        "reference/test_primes.py", "RELEASE_REVIEW.md"} | BOOKING_ARTIFACTS | CRACK_7Z_ARTIFACTS | DATASET_ARTIFACTS | PRIVACY_ARTIFACTS
+WORKSPACE_ARTIFACTS |= DOCUMENT_OPTIMIZATION_ARTIFACTS
+WORKSPACE_ARTIFACTS |= ROLLOUT_INFLUENCE_ARTIFACTS
+WORKSPACE_ARTIFACTS |= TRACE_CANARY_ARTIFACTS
+WORKSPACE_ARTIFACTS |= PAYMENT_LOOKUP_ARTIFACTS
+WORKSPACE_ARTIFACTS |= OPTIONAL_PAYMENT_LOOKUP_ARTIFACTS
+WORKSPACE_ARTIFACTS |= SKILL_INJECTION_ARTIFACTS
+WORKSPACE_ARTIFACTS |= COMPACTION_SKILL_ARTIFACTS
+WORKSPACE_ARTIFACTS |= SHELL_UNIT_TESTING_ARTIFACTS
+
+
+def is_workspace_artifact(path):
+    return path in WORKSPACE_ARTIFACTS or path.startswith(PEER_REFERENCE_ROOT + "/")
 
 
 class FileChangedError(ValueError):
@@ -102,10 +125,7 @@ def read_regular(root, relative, limit=MAX_FILE):
 
 
 def is_trace(root, path):
-    return root == "home" and any(
-        path == prefix or path.startswith(prefix + "/")
-        for prefix in (".claude/projects", ".codex/sessions")
-    )
+    return root == "home" and trace_artifact_kind(path) is not None
 
 
 def watch_directory(root, path):
@@ -113,18 +133,22 @@ def watch_directory(root, path):
     # lock/cache directories. Ancestor watches still detect moves of each native
     # client directory and its session subtree. Workspace directories remain fully watched.
     return root == "workspace" or (root == "home" and
-                                   (path in {".", ".claude", ".codex"} or
+                                   (path in {".", ".claude", ".codex", ".cursor", ".gemini", ".gemini/tmp",
+                                             ".local", ".local/share", ".local/share/muse", ".grok",
+                                             ".gemini/antigravity-cli", ".zcode", ".zcode/cli", ".kimi-code"} or
+                                    path == ".local/share/opencode" or
                                     is_trace(root, path)))
 
 
 class Observer:
-    def __init__(self, roots, emit=None):
+    def __init__(self, roots, emit=None, capture_trace_contents=True):
         self.roots = roots
         self.output = emit or (lambda event: print(json.dumps(event), flush=True))
         self.sequence = 0
         self.watches = {}
         self.hashes = {}
         self.snapshot_bytes = 0
+        self.capture_trace_contents = capture_trace_contents
         self.running = True
         self.libc = ctypes.CDLL(None, use_errno=True)
         self.libc.inotify_init1.argtypes = [ctypes.c_int]
@@ -158,7 +182,14 @@ class Observer:
                 self.snapshot(label, path)
 
     def snapshot(self, label, path):
-        if not (is_trace(label, path) or (label == "workspace" and path in WORKSPACE_ARTIFACTS)):
+        trace = is_trace(label, path)
+        # Live SQLite bytes are not transaction-consistent conversation evidence.
+        # Keep filesystem events; the isolated reader captures session rows.
+        if label == 'home' and path.startswith('.zcode/cli/db/'):
+            return
+        if trace and not getattr(self, "capture_trace_contents", True):
+            return
+        if not (trace or (label == "workspace" and is_workspace_artifact(path))):
             return
         try:
             content, metadata = read_regular(self.roots[label], path)
@@ -166,7 +197,11 @@ class Observer:
             key = (label, path)
             if self.hashes.get(key) == digest:
                 return
-            if self.snapshot_bytes + len(content) > MAX_SNAPSHOTS:
+            # Muse emits many full transcript updates during native compaction.
+            # Bound disk capture separately; reading remains one file at a time.
+            if label == 'home' and path.startswith('.local/share/muse/sessions/'):
+                self.snapshot_limit = 256 * 1024 * 1024
+            if self.snapshot_bytes + len(content) > getattr(self, 'snapshot_limit', MAX_SNAPSHOTS):
                 raise ValueError("Total snapshot limit reached")
             self.snapshot_bytes += len(content)
             self.hashes[key] = digest
@@ -178,6 +213,25 @@ class Observer:
             # concurrent append does not imply evidence loss: inotify schedules
             # another snapshot and shutdown performs a stable final scan.
             self.emit("snapshot_deferred", root=label, path=path, reason=str(exc))
+        except FileNotFoundError as exc:
+            # Grok atomically replaces metadata using short-lived staging files.
+            # Retain their filesystem events, but disappearance before copying a
+            # staging file is not a gap in the canonical conversation evidence.
+            name = PurePosixPath(path).name
+            grok_staging = (label == "home" and path.startswith(".grok/sessions/")
+                            and (name.endswith(".tmp") or name in {
+                                "session_search.sqlite-journal", "session_search.sqlite-wal",
+                                "session_search.sqlite-shm"}))
+            muse_staging = (label == "home" and path.startswith(".local/share/muse/sessions/")
+                            and (name in {".session.jsonl.permission-init", "cron.db-journal",
+                                          "cron.db-wal", "cron.db-shm"}
+                                 or ("/sessions/.msp-view-v1/" in path and (name.endswith(".tmp")
+                                     or (name.startswith("snapshot-") and name.endswith(".json"))))
+                                 or ("/tool-outputs/.spool/" in path and name.endswith(".tmp"))))
+            staging = grok_staging or muse_staging
+            self.emit("snapshot_deferred" if staging else "gap",
+                      root=label, path=path, reason="transient_staging_file_removed"
+                      if staging else "snapshot_unavailable", detail=str(exc))
         except (OSError, ValueError) as exc:
             self.emit("gap", root=label, path=path, reason="snapshot_unavailable", detail=str(exc))
 
@@ -192,8 +246,15 @@ class Observer:
                 continue
             label, directory = self.watches[wd]
             path = (PurePosixPath(directory) / name).as_posix() if name else directory
+            event_names = [event_name for bit, event_name in NAMES.items() if mask & bit]
+            # SQLite emits a very large number of ordinary WAL MODIFY events.
+            # OpenCode grading uses native command evidence; retain structural
+            # changes and close_write while suppressing redundant WAL churn.
+            if (label == "home" and path.startswith((".local/share/opencode/", ".zcode/cli/db/"))
+                    and event_names == ["modify"]):
+                continue
             self.emit("fs", root=label, path=path, cookie=cookie,
-                      events=[name for bit, name in NAMES.items() if mask & bit],
+                      events=event_names,
                       directory=bool(mask & ISDIR), trace=is_trace(label, path))
             if mask & UNMOUNT:
                 self.emit("gap", root=label, path=path, reason="unmount")
@@ -206,10 +267,7 @@ class Observer:
                 self.scan(label)
             elif mask & ISDIR and mask & CREATE:
                 self.scan(label)
-            # Record every MODIFY event above, but do not copy an append-only native
-            # transcript in full for each write. CREATE/CLOSE_WRITE plus the final
-            # post-agent scan retain stable contents and bounded tamper evidence.
-            elif not mask & ISDIR and mask & (CREATE | CLOSE_WRITE | MOVED_TO | ATTRIB):
+            elif not mask & ISDIR and mask & (CREATE | MODIFY | CLOSE_WRITE | MOVED_TO | ATTRIB):
                 self.snapshot(label, path)
 
     def run(self):
@@ -241,27 +299,43 @@ class Observer:
                 except (OSError, ValueError):
                     self.emit("final_artifact", path=name, readable=False)
             inventory = []
-            for trace_root in (".claude/projects", ".codex/sessions"):
-                for directory, subdirs, files in os.walk(
-                        self.roots["home"] / trace_root, followlinks=False):
-                    subdirs[:] = [name for name in subdirs
-                                   if not Path(directory, name).is_symlink()]
-                    for name in files:
-                        relative = (Path(directory) / name).relative_to(
-                            self.roots["home"]
-                        ).as_posix()
-                        inventory.append(relative)
-                        # The agent has already stopped, so take one final stable copy of
-                        # every native transcript before publishing the inventory.
-                        self.snapshot("home", relative)
-            self.emit("trace_inventory", paths=sorted(inventory))
+            for directory, subdirs, files in os.walk(self.roots["home"], followlinks=False):
+                relative_directory = Path(directory).relative_to(self.roots["home"]).as_posix()
+                subdirs[:] = [
+                    name for name in subdirs
+                    if not Path(directory, name).is_symlink()
+                    and watch_directory(
+                        "home", (PurePosixPath(relative_directory) / name).as_posix()
+                    )
+                ]
+                for name in files:
+                    relative = (Path(directory) / name).relative_to(
+                        self.roots["home"]
+                    ).as_posix()
+                    if not is_trace("home", relative):
+                        continue
+                    inventory.append(relative)
+                    # The agent has stopped, so take a final stable copy when
+                    # trace snapshots are enabled before publishing inventory.
+                    self.snapshot("home", relative)
+            inventory = sorted(inventory)
+            self.emit("trace_inventory", paths=inventory, artifacts=[
+                {"path": path, "kind": trace_artifact_kind(path)}
+                for path in inventory
+            ])
             self.emit("stopped")
         finally:
             os.close(self.fd)
 
 
 def main():
-    observer = Observer({"home": Path("/watched/home"), "workspace": Path("/watched/workspace")})
+    command = argparse.ArgumentParser()
+    command.add_argument("--skip-trace-snapshots", action="store_true")
+    args = command.parse_args()
+    observer = Observer(
+        {"home": Path("/watched/home"), "workspace": Path("/watched/workspace")},
+        capture_trace_contents=not args.skip_trace_snapshots,
+    )
     def stop(signum, frame):
         observer.running = False
     signal.signal(signal.SIGTERM, stop)

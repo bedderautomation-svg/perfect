@@ -1,5 +1,0 @@
-*
-!Dockerfile
-!trace_lab/
-!trace_lab/**
-trace_lab/**/__pycache__

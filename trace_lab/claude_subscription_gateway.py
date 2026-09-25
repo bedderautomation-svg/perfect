@@ -75,10 +75,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.fail(400, "Request rejected by experiment gateway")
             return
         with self.server.request_lock:
-            if self.server.remaining <= 0:
+            if self.server.remaining is not None and self.server.remaining <= 0:
                 self.fail(429, "Experiment request limit reached")
                 return
-            self.server.remaining -= 1
+            if self.server.remaining is not None:
+                self.server.remaining -= 1
         sent_headers = False
         upstream = http.client.HTTPSConnection("api.anthropic.com", timeout=60)
         try:
@@ -114,7 +115,7 @@ def main():
     with Server("/relay/api.sock", Handler) as server:
         os.chmod("/relay/api.sock", 0o666)
         server.request_lock = threading.Lock()
-        server.remaining = args.max_requests
+        server.remaining = None if args.max_requests == 0 else args.max_requests
         print("gateway ready", flush=True)
         server.serve_forever()
 

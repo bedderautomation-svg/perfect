@@ -26,9 +26,10 @@ def emit(**fields):
 
 def consume_request(server):
     with server.request_lock:
-        if server.remaining <= 0:
+        if server.remaining is not None and server.remaining <= 0:
             return False
-        server.remaining -= 1
+        if server.remaining is not None:
+            server.remaining -= 1
         return True
 
 
@@ -228,7 +229,7 @@ def main():
         os.chmod("/relay/api.sock", 0o666)
         server.expected_model = args.expected_model
         server.request_lock = threading.Lock()
-        server.remaining = args.max_requests
+        server.remaining = None if args.max_requests == 0 else args.max_requests
         print("gateway ready", flush=True)
         server.serve_forever()
 

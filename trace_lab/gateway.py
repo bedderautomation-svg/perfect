@@ -7,10 +7,12 @@ import json
 import os
 import socketserver
 import threading
+import time
 from urllib.parse import urlsplit
 
 MAX_BODY = 16 * 1024 * 1024
 MAX_OUTPUT_TOKENS = 65536
+MODEL_OUTPUT_LIMITS = {"claude-opus-5-5": 128000}
 ALLOWED_PATHS = {"/v1/messages", "/v1/messages/count_tokens"}
 
 
@@ -27,7 +29,8 @@ def validate_request(path, body):
         raise ValueError("Expected an explicit Claude model identifier")
     if parsed.path == "/v1/messages":
         tokens = data.get("max_tokens")
-        if type(tokens) is not int or not 1 <= tokens <= MAX_OUTPUT_TOKENS:
+        limit = MODEL_OUTPUT_LIMITS.get(data["model"], MAX_OUTPUT_TOKENS)
+        if type(tokens) is not int or not 1 <= tokens <= limit:
             raise ValueError("Output token limit is outside the gateway bounds")
     # Server-executed tools could access external targets independently of Docker.
     for tool in data.get("tools", []):
@@ -70,14 +73,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if len(body) != length:
                 raise ValueError("Incomplete request")
             path = validate_request(self.path, body)
-        except (ValueError, OSError, TypeError):
+        except (ValueError, OSError, TypeError) as exc:
+            # Validation errors contain fixed diagnostics, never request bodies
+            # or credentials. Preserve why a new native client was rejected.
+            print(json.dumps({"kind": "gateway_rejected", "reason": str(exc)[:200]}), flush=True)
             self.fail(400, "Request rejected by experiment gateway")
             return
         with self.server.request_lock:
-            if self.server.remaining <= 0:
+            if self.server.remaining is not None and self.server.remaining <= 0:
                 self.fail(429, "Experiment request limit reached")
                 return
-            self.server.remaining -= 1
+            if self.server.remaining is not None:
+                self.server.remaining -= 1
+        if getattr(self.server, "log_request_bodies", False):
+            print(json.dumps({"kind": "gateway_request_body", "observed_ns": time.time_ns(),
+                              "path": path, "body": json.loads(body)}), flush=True)
         headers = {
             "x-api-key": self.server.api_key,
             "anthropic-version": self.headers.get("anthropic-version", "2023-06-01"),
@@ -117,6 +127,8 @@ class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--max-requests", type=int, default=60)
+    parser.add_argument("--log-request-bodies", action="store_true",
+                        help="opt-in synthetic compaction evidence; never records headers")
     args = parser.parse_args()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -125,7 +137,8 @@ def main():
         os.chmod("/relay/api.sock", 0o666)
         server.api_key = api_key
         server.request_lock = threading.Lock()
-        server.remaining = args.max_requests
+        server.remaining = None if args.max_requests == 0 else args.max_requests
+        server.log_request_bodies = args.log_request_bodies
         print("gateway ready", flush=True)
         server.serve_forever()
 

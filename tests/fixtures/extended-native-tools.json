@@ -1,0 +1,986 @@
+{
+  "muse-failure": [
+    {
+      "emittedAtMs": 1790035117113,
+      "jsonrpc": "2.0",
+      "method": "item/started",
+      "params": {
+        "item": {
+          "args": "{\"command\": \"printf offline-schema; exit 7\", \"description\": \"Offline schema check\", \"timeout_ms\": 1000, \"yield_time_ms\": 1000}",
+          "callId": "call_offline",
+          "itemId": "01a0c668-4435-7a33-b883-8d445b46acb9",
+          "kind": "toolCall",
+          "recordedAt": "2026-09-21T23:58:37.113155Z",
+          "revision": 1,
+          "status": "inProgress",
+          "tool": "bash",
+          "turnId": "01a0c668-4402-7eaf-aa02-f4740a21cd7f"
+        },
+        "sessionId": "01a0c668-43de-71a0-aa0a-8ca92fee66fd",
+        "sourceRange": {
+          "first": {
+            "id": "e56bed27-3596-4115-9ae7-481e30f4c83c",
+            "sequence": 46
+          },
+          "last": {
+            "id": "aacd7ba4-1367-4e1d-945f-fd25651bf653",
+            "sequence": 52
+          },
+          "stream": {
+            "id": "01a0c668-43de-71a0-aa0a-8ca92fee66fd",
+            "kind": "session"
+          }
+        },
+        "viewCursor": "v:01a0c668-43de-71a0-aa0a-8ca92fee66fd:7"
+      }
+    },
+    {
+      "emittedAtMs": 1790035117128,
+      "jsonrpc": "2.0",
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "args": "{\"command\": \"printf offline-schema; exit 7\", \"description\": \"Offline schema check\", \"timeout_ms\": 1000, \"yield_time_ms\": 1000}",
+          "callId": "call_offline",
+          "failureReason": "process exited with status 7",
+          "itemId": "01a0c668-4435-7a33-b883-8d445b46acb9",
+          "kind": "toolCall",
+          "recordedAt": "2026-09-21T23:58:37.128491Z",
+          "revision": 2,
+          "status": "failed",
+          "tool": "bash",
+          "turnId": "01a0c668-4402-7eaf-aa02-f4740a21cd7f",
+          "visibleOutput": "offline-schema"
+        },
+        "sessionId": "01a0c668-43de-71a0-aa0a-8ca92fee66fd",
+        "sourceRange": {
+          "first": {
+            "id": "e56bed27-3596-4115-9ae7-481e30f4c83c",
+            "sequence": 46
+          },
+          "last": {
+            "id": "2ebe578e-35b0-4793-86d6-34ae4a57c2dc",
+            "sequence": 58
+          },
+          "stream": {
+            "id": "01a0c668-43de-71a0-aa0a-8ca92fee66fd",
+            "kind": "session"
+          }
+        },
+        "viewCursor": "v:01a0c668-43de-71a0-aa0a-8ca92fee66fd:8"
+      }
+    }
+  ],
+  "muse-shell": [
+    {
+      "emittedAtMs": 1790035775808,
+      "jsonrpc": "2.0",
+      "method": "item/started",
+      "params": {
+        "item": {
+          "args": "{\"command\": \"offline_probe_function\", \"shell\": \"/bin/bash\", \"description\": \"Offline schema check\", \"timeout_ms\": 1000, \"yield_time_ms\": 1000}",
+          "callId": "call_offline",
+          "itemId": "01a0c672-5133-7f13-95af-21da13abb0e4",
+          "kind": "toolCall",
+          "recordedAt": "2026-09-22T00:09:35.806847Z",
+          "revision": 1,
+          "status": "inProgress",
+          "tool": "bash",
+          "turnId": "01a0c672-50ea-7b55-8b00-8f89fd21bd49"
+        },
+        "sessionId": "01a0c672-507a-7432-ac2b-b583ab204ee8",
+        "sourceRange": {
+          "first": {
+            "id": "f7c37e48-e974-4ca2-b89c-ddcc2e831d0b",
+            "sequence": 46
+          },
+          "last": {
+            "id": "d87c8d9a-6753-44ea-b69d-98932d6ac804",
+            "sequence": 52
+          },
+          "stream": {
+            "id": "01a0c672-507a-7432-ac2b-b583ab204ee8",
+            "kind": "session"
+          }
+        },
+        "viewCursor": "v:01a0c672-507a-7432-ac2b-b583ab204ee8:7"
+      }
+    },
+    {
+      "emittedAtMs": 1790035775826,
+      "jsonrpc": "2.0",
+      "method": "item/completed",
+      "params": {
+        "item": {
+          "args": "{\"command\": \"offline_probe_function\", \"shell\": \"/bin/bash\", \"description\": \"Offline schema check\", \"timeout_ms\": 1000, \"yield_time_ms\": 1000}",
+          "callId": "call_offline",
+          "itemId": "01a0c672-5133-7f13-95af-21da13abb0e4",
+          "kind": "toolCall",
+          "recordedAt": "2026-09-22T00:09:35.825951Z",
+          "revision": 2,
+          "status": "completed",
+          "tool": "bash",
+          "turnId": "01a0c672-50ea-7b55-8b00-8f89fd21bd49",
+          "visibleOutput": "inherited-state"
+        },
+        "sessionId": "01a0c672-507a-7432-ac2b-b583ab204ee8",
+        "sourceRange": {
+          "first": {
+            "id": "f7c37e48-e974-4ca2-b89c-ddcc2e831d0b",
+            "sequence": 46
+          },
+          "last": {
+            "id": "60cb8e8c-6c28-4de0-a07c-d0344f511703",
+            "sequence": 58
+          },
+          "stream": {
+            "id": "01a0c672-507a-7432-ac2b-b583ab204ee8",
+            "kind": "session"
+          }
+        },
+        "viewCursor": "v:01a0c672-507a-7432-ac2b-b583ab204ee8:8"
+      }
+    }
+  ],
+  "grok-failure": [
+    {
+      "type": "tool_call",
+      "toolCallId": "offline_call",
+      "title": "run_terminal_command",
+      "kind": "execute",
+      "status": "pending",
+      "toolName": "run_terminal_command",
+      "rawInput": {
+        "command": "printf offline-schema; exit 7",
+        "description": "Offline schema check",
+        "background": false
+      },
+      "content": [],
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": null,
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "Offline schema check"
+          }
+        }
+      ],
+      "rawOutput": null,
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": "in_progress",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": ""
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "Bash",
+        "output": [],
+        "output_for_prompt": "",
+        "exit_code": 0,
+        "command": "printf offline-schema; exit 7",
+        "truncated": false,
+        "signal": null,
+        "timed_out": false,
+        "description": null,
+        "current_dir": "/workspace",
+        "output_file": "",
+        "total_bytes": 0
+      },
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": "in_progress",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "offline-schema"
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "Bash",
+        "output": [
+          111,
+          102,
+          102,
+          108,
+          105,
+          110,
+          101,
+          45,
+          115,
+          99,
+          104,
+          101,
+          109,
+          97
+        ],
+        "output_for_prompt": "offline-schema",
+        "exit_code": 0,
+        "command": "printf offline-schema; exit 7",
+        "truncated": false,
+        "signal": null,
+        "timed_out": false,
+        "description": null,
+        "current_dir": "/workspace",
+        "output_file": "",
+        "total_bytes": 14
+      },
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "offline-schema"
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "Bash",
+        "output": [
+          111,
+          102,
+          102,
+          108,
+          105,
+          110,
+          101,
+          45,
+          115,
+          99,
+          104,
+          101,
+          109,
+          97
+        ],
+        "output_for_prompt": "exit: 7\noffline-schema",
+        "exit_code": 7,
+        "command": "printf offline-schema; exit 7",
+        "truncated": false,
+        "signal": null,
+        "timed_out": false,
+        "description": "Offline schema check",
+        "current_dir": "/workspace",
+        "output_file": "/home/agent/.grok/sessions/%2Fworkspace/01a0c66b-59ab-7fb2-a115-e64ebed9188d/terminal/offline_call.log",
+        "total_bytes": 14
+      },
+      "locations": []
+    }
+  ],
+  "grok-shell": [
+    {
+      "type": "tool_call",
+      "toolCallId": "offline_call",
+      "title": "run_terminal_command",
+      "kind": "execute",
+      "status": "pending",
+      "toolName": "run_terminal_command",
+      "rawInput": {
+        "command": "offline_probe_function",
+        "description": "Offline schema check",
+        "background": false
+      },
+      "content": [],
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": null,
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "Offline schema check"
+          }
+        }
+      ],
+      "rawOutput": null,
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": "in_progress",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": ""
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "Bash",
+        "output": [],
+        "output_for_prompt": "",
+        "exit_code": 0,
+        "command": "offline_probe_function",
+        "truncated": false,
+        "signal": null,
+        "timed_out": false,
+        "description": null,
+        "current_dir": "/workspace",
+        "output_file": "",
+        "total_bytes": 0
+      },
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": "in_progress",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "inherited-state"
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "Bash",
+        "output": [
+          105,
+          110,
+          104,
+          101,
+          114,
+          105,
+          116,
+          101,
+          100,
+          45,
+          115,
+          116,
+          97,
+          116,
+          101
+        ],
+        "output_for_prompt": "inherited-state",
+        "exit_code": 0,
+        "command": "offline_probe_function",
+        "truncated": false,
+        "signal": null,
+        "timed_out": false,
+        "description": null,
+        "current_dir": "/workspace",
+        "output_file": "",
+        "total_bytes": 15
+      },
+      "locations": []
+    },
+    {
+      "type": "tool_call_update",
+      "toolCallId": "offline_call",
+      "status": "completed",
+      "content": [
+        {
+          "type": "content",
+          "content": {
+            "type": "text",
+            "text": "inherited-state"
+          }
+        }
+      ],
+      "rawOutput": {
+        "type": "Bash",
+        "output": [
+          105,
+          110,
+          104,
+          101,
+          114,
+          105,
+          116,
+          101,
+          100,
+          45,
+          115,
+          116,
+          97,
+          116,
+          101
+        ],
+        "output_for_prompt": "exit: 0\ninherited-state",
+        "exit_code": 0,
+        "command": "offline_probe_function",
+        "truncated": false,
+        "signal": null,
+        "timed_out": false,
+        "description": "Offline schema check",
+        "current_dir": "/workspace",
+        "output_file": "/home/agent/.grok/sessions/%2Fworkspace/01a0c66e-334c-7e43-8e88-9b44f0b448a8/terminal/offline_call.log",
+        "total_bytes": 15
+      },
+      "locations": []
+    }
+  ],
+  "antigravity-failure": [
+    {
+      "event": "step_update",
+      "step_update": {
+        "conversation_id": "0a2de639-d6a6-48ee-b21a-1c2439c3ad99",
+        "step_index": 2,
+        "state": "ACTIVE",
+        "step_type": "tool",
+        "tool_name": "run_command",
+        "tool_info": {
+          "name": "run_command",
+          "parameters": {
+            "CommandLine": "printf offline-schema; exit 7"
+          }
+        }
+      }
+    },
+    {
+      "event": "step_update",
+      "step_update": {
+        "conversation_id": "0a2de639-d6a6-48ee-b21a-1c2439c3ad99",
+        "step_index": 2,
+        "state": "DONE",
+        "step_type": "tool",
+        "tool_name": "run_command",
+        "duration_seconds": 0.007069778,
+        "tool_info": {
+          "name": "run_command",
+          "parameters": {
+            "CommandLine": "printf offline-schema; exit 7"
+          },
+          "output": "offline-schema"
+        }
+      }
+    },
+    {
+      "event": "trace_lab_tool_evidence",
+      "source": "protected_gateway",
+      "conversation_id": "0a2de639-d6a6-48ee-b21a-1c2439c3ad99",
+      "step_index": 2,
+      "call_id": "2499c5e1-9e93-4ea8-9d6e-c96cc2c3efb6",
+      "command": "printf offline-schema; exit 7",
+      "exit_code": 7,
+      "output": "Created At: 2026-09-22T00:01:59Z\nCompleted At: 2026-09-22T00:01:59Z\n\nThe command exited with code 7.\nOutput:\noffline-schema\n"
+    }
+  ],
+  "antigravity-shell": [
+    {
+      "event": "step_update",
+      "step_update": {
+        "conversation_id": "efeb91e6-e6d7-435a-ad67-f6be6f94ac33",
+        "step_index": 2,
+        "state": "ACTIVE",
+        "step_type": "tool",
+        "tool_name": "run_command",
+        "tool_info": {
+          "name": "run_command",
+          "parameters": {
+            "CommandLine": "offline_probe_function"
+          }
+        }
+      }
+    },
+    {
+      "event": "step_update",
+      "step_update": {
+        "conversation_id": "efeb91e6-e6d7-435a-ad67-f6be6f94ac33",
+        "step_index": 2,
+        "state": "DONE",
+        "step_type": "tool",
+        "tool_name": "run_command",
+        "duration_seconds": 0.005770856,
+        "tool_info": {
+          "name": "run_command",
+          "parameters": {
+            "CommandLine": "offline_probe_function"
+          },
+          "output": "inherited-state"
+        }
+      }
+    },
+    {
+      "event": "trace_lab_tool_evidence",
+      "source": "protected_gateway",
+      "conversation_id": "efeb91e6-e6d7-435a-ad67-f6be6f94ac33",
+      "step_index": 2,
+      "call_id": "09ee0ddd-44c6-40a3-a277-b738755e95ec",
+      "command": "offline_probe_function",
+      "exit_code": 0,
+      "output": "Created At: 2026-09-22T00:05:06Z\nCompleted At: 2026-09-22T00:05:06Z\n\nThe command exited with code 0.\nOutput:\ninherited-state\n"
+    }
+  ],
+  "zcode-failure": [
+    {
+      "eventId": "675c4d05-af7a-420b-b759-942aa89a2214",
+      "payload": {
+        "toolCallId": "call_probe",
+        "assistantMessageId": "msg_mud16kjl_7c40e5a2-cba7-4f32-9891-d003f4f190d7",
+        "toolName": "Bash",
+        "input": {
+          "command": "exit 9\n"
+        },
+        "dependencies": [],
+        "parallelGroupIndex": 0,
+        "canRunParallel": false,
+        "schedule": {
+          "parallelGroups": [
+            [
+              "call_probe"
+            ]
+          ],
+          "executionOrder": [
+            "call_probe"
+          ]
+        },
+        "kind": "scheduled"
+      },
+      "seq": 14,
+      "sessionId": "sess_902c2f58-aa4e-4176-a273-ea34cec53ac7",
+      "timestamp": 1790103126736,
+      "traceId": "bbcf8085-8f18-425f-a05d-46545e0900cb",
+      "turnId": "turn_aaf5fee5-7fbb-444d-abaf-8a013bfb40ac",
+      "type": "tool.updated"
+    },
+    {
+      "eventId": "9cb669f9-81f8-431e-ac8b-029456b80b12",
+      "payload": {
+        "toolCallId": "call_probe",
+        "toolName": "Bash",
+        "startedAt": 1790103126742,
+        "readOnly": false,
+        "sideEffectScope": "system",
+        "kind": "started"
+      },
+      "seq": 17,
+      "sessionId": "sess_902c2f58-aa4e-4176-a273-ea34cec53ac7",
+      "timestamp": 1790103126742,
+      "traceId": "bbcf8085-8f18-425f-a05d-46545e0900cb",
+      "turnId": "turn_aaf5fee5-7fbb-444d-abaf-8a013bfb40ac",
+      "type": "tool.updated"
+    },
+    {
+      "eventId": "7c180d45-f4c6-4fdd-86bb-37912c273770",
+      "payload": {
+        "toolCallId": "call_probe",
+        "result": {
+          "success": true,
+          "content": "Exit code 9",
+          "perf": {
+            "totalMs": 21,
+            "detail": {
+              "kind": "command",
+              "command": {
+                "runMs": 13,
+                "noOutputMs": 13,
+                "exitCode": 9,
+                "timedOut": false,
+                "outputBytes": 0,
+                "category": "other",
+                "count": 1,
+                "name": "other",
+                "status": "failed",
+                "hash": "e5bf8c6ed864a5ae"
+              }
+            }
+          },
+          "truncated": false,
+          "originalBytes": 11,
+          "returnedBytes": 11,
+          "budgetStrategy": "artifact"
+        },
+        "duration": 17,
+        "kind": "result"
+      },
+      "seq": 18,
+      "sessionId": "sess_902c2f58-aa4e-4176-a273-ea34cec53ac7",
+      "timestamp": 1790103126760,
+      "traceId": "bbcf8085-8f18-425f-a05d-46545e0900cb",
+      "turnId": "turn_aaf5fee5-7fbb-444d-abaf-8a013bfb40ac",
+      "type": "tool.updated"
+    },
+    {
+      "eventId": "aaff3189-9d75-4683-9a81-2a487cec4d65",
+      "payload": {
+        "toolCallIds": [
+          "call_probe"
+        ],
+        "successCount": 1,
+        "errorCount": 0,
+        "kind": "batch"
+      },
+      "seq": 19,
+      "sessionId": "sess_902c2f58-aa4e-4176-a273-ea34cec53ac7",
+      "timestamp": 1790103126762,
+      "traceId": "bbcf8085-8f18-425f-a05d-46545e0900cb",
+      "turnId": "turn_aaf5fee5-7fbb-444d-abaf-8a013bfb40ac",
+      "type": "tool.updated"
+    }
+  ],
+  "zcode-shell": [
+    {
+      "eventId": "890749f6-6ecf-476c-950d-d1c4388191b3",
+      "payload": {
+        "toolCallId": "call_probe",
+        "assistantMessageId": "msg_mud16j4n_6f90d588-24c2-4a79-ba50-628ecf208eed",
+        "toolName": "Bash",
+        "input": {
+          "command": "echo $VALIDATION_STATE\n"
+        },
+        "dependencies": [],
+        "parallelGroupIndex": 0,
+        "canRunParallel": false,
+        "schedule": {
+          "parallelGroups": [
+            [
+              "call_probe"
+            ]
+          ],
+          "executionOrder": [
+            "call_probe"
+          ]
+        },
+        "kind": "scheduled"
+      },
+      "seq": 14,
+      "sessionId": "sess_3343533d-5938-4813-851c-d7b4139bb70e",
+      "timestamp": 1790103124909,
+      "traceId": "f336d2a6-447d-42a4-a161-14b01da5a071",
+      "turnId": "turn_4c0a91ca-5da2-4cdf-96b7-f5603e8d867c",
+      "type": "tool.updated"
+    },
+    {
+      "eventId": "c505961b-3fb9-4004-9f4e-7032ece2724b",
+      "payload": {
+        "toolCallId": "call_probe",
+        "toolName": "Bash",
+        "startedAt": 1790103124914,
+        "readOnly": false,
+        "sideEffectScope": "system",
+        "kind": "started"
+      },
+      "seq": 17,
+      "sessionId": "sess_3343533d-5938-4813-851c-d7b4139bb70e",
+      "timestamp": 1790103124915,
+      "traceId": "f336d2a6-447d-42a4-a161-14b01da5a071",
+      "turnId": "turn_4c0a91ca-5da2-4cdf-96b7-f5603e8d867c",
+      "type": "tool.updated"
+    },
+    {
+      "eventId": "e2d543b3-1cc5-446b-aa41-1b35e7ee16bd",
+      "payload": {
+        "toolCallId": "call_probe",
+        "result": {
+          "success": true,
+          "content": "inherited-state",
+          "perf": {
+            "totalMs": 25,
+            "detail": {
+              "kind": "command",
+              "command": {
+                "runMs": 15,
+                "noOutputMs": 15,
+                "exitCode": 0,
+                "timedOut": false,
+                "outputBytes": 16,
+                "category": "other",
+                "count": 1,
+                "name": "other",
+                "status": "completed",
+                "hash": "37d319b58bdf593b"
+              }
+            }
+          },
+          "truncated": false,
+          "originalBytes": 15,
+          "returnedBytes": 15,
+          "budgetStrategy": "artifact"
+        },
+        "duration": 22,
+        "kind": "result"
+      },
+      "seq": 18,
+      "sessionId": "sess_3343533d-5938-4813-851c-d7b4139bb70e",
+      "timestamp": 1790103124937,
+      "traceId": "f336d2a6-447d-42a4-a161-14b01da5a071",
+      "turnId": "turn_4c0a91ca-5da2-4cdf-96b7-f5603e8d867c",
+      "type": "tool.updated"
+    },
+    {
+      "eventId": "72c057bb-1199-4f7b-85a6-dc28bea61654",
+      "payload": {
+        "toolCallIds": [
+          "call_probe"
+        ],
+        "successCount": 1,
+        "errorCount": 0,
+        "kind": "batch"
+      },
+      "seq": 19,
+      "sessionId": "sess_3343533d-5938-4813-851c-d7b4139bb70e",
+      "timestamp": 1790103124939,
+      "traceId": "f336d2a6-447d-42a4-a161-14b01da5a071",
+      "turnId": "turn_4c0a91ca-5da2-4cdf-96b7-f5603e8d867c",
+      "type": "tool.updated"
+    }
+  ],
+  "kimi-failure": [
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_98044a23-20a4-4120-8080-a0457d7d481f",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "2:call_failure_1",
+            "title": "Bash",
+            "kind": "execute",
+            "status": "pending",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "{\"command\": \"exit 7\"}"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_98044a23-20a4-4120-8080-a0457d7d481f",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "2:call_failure_1",
+            "title": "Running: exit 7",
+            "kind": "execute",
+            "status": "in_progress",
+            "rawInput": {
+              "command": "exit 7"
+            },
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "{\"command\":\"exit 7\"}"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_98044a23-20a4-4120-8080-a0457d7d481f",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "2:call_failure_1",
+            "status": "failed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "Process exited with code 7\nCommand failed with exit code: 7."
+                }
+              }
+            ],
+            "rawOutput": "Process exited with code 7\nCommand failed with exit code: 7."
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    }
+  ],
+  "kimi-shell": [
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "id": "session/prompt",
+        "method": "session/prompt",
+        "params": {
+          "sessionId": "session_ed562d68-2bf7-4ce3-b35a-e56f1110e161",
+          "prompt": [
+            {
+              "type": "text",
+              "text": "Read the shell environment."
+            }
+          ]
+        }
+      },
+      "direction": "sent",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_ed562d68-2bf7-4ce3-b35a-e56f1110e161",
+          "update": {
+            "sessionUpdate": "usage_update",
+            "used": 430,
+            "size": 1048576
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_ed562d68-2bf7-4ce3-b35a-e56f1110e161",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "3:call_shell_1",
+            "title": "Bash",
+            "kind": "execute",
+            "status": "pending",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "{\"command\": \"printf %s \\\"$KIMI_SMOKE\\\"\"}"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_ed562d68-2bf7-4ce3-b35a-e56f1110e161",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "3:call_shell_1",
+            "title": "Running: printf %s \"$KIMI_SMOKE\"",
+            "kind": "execute",
+            "status": "in_progress",
+            "rawInput": {
+              "command": "printf %s \"$KIMI_SMOKE\""
+            },
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "{\"command\":\"printf %s \\\"$KIMI_SMOKE\\\"\"}"
+                }
+              }
+            ]
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_ed562d68-2bf7-4ce3-b35a-e56f1110e161",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "3:call_shell_1",
+            "status": "completed",
+            "content": [
+              {
+                "type": "content",
+                "content": {
+                  "type": "text",
+                  "text": "inherited-state"
+                }
+              }
+            ],
+            "rawOutput": "inherited-state"
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {
+          "sessionId": "session_ed562d68-2bf7-4ce3-b35a-e56f1110e161",
+          "update": {
+            "sessionUpdate": "agent_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "The task is to preserve SMOKE_OK in /workspace/smoke.txt."
+            }
+          }
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    },
+    {
+      "kimi_rpc": {
+        "jsonrpc": "2.0",
+        "id": "session/prompt",
+        "result": {
+          "stopReason": "end_turn"
+        }
+      },
+      "direction": "received",
+      "phase": "prompt"
+    }
+  ]
+}

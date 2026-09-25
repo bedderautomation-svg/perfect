@@ -15,12 +15,42 @@ from trace_lab.cli import native_command, parser
 from trace_lab.fixtures import EXPECTED, PRIME_PROMPT, cleanup_prompt
 from trace_lab.prime_check import expected_primes
 from trace_lab.gateway import Handler, Server, validate_request
-from trace_lab.observer import (CLOSE_WRITE, DELETE, MODIFY, FileChangedError,
-                                Observer, decode_events, read_regular)
+from trace_lab.observer import (DELETE, FileChangedError, Observer, decode_events,
+                                read_regular)
 from trace_lab.report import export_native_trace, summarize
 
 
 class FilesystemBoundaries(unittest.TestCase):
+    def test_grok_staging_disappearance_does_not_hide_transcript_gaps(self):
+        observer = Observer.__new__(Observer)
+        observer.roots = {"home": Path("/unused")}
+        observer.hashes = {}
+        observer.snapshot_bytes = 0
+        events = []
+        observer.emit = lambda kind, **fields: events.append({"kind": kind, **fields})
+        with patch("trace_lab.observer.read_regular", side_effect=FileNotFoundError()):
+            for path in (".grok/sessions/work/session/summary.json.uuid.tmp",
+                         ".grok/sessions/session_search.sqlite-wal",
+                         ".grok/sessions/work/session/chat_history.jsonl",
+                         ".grok/sessions/work/session/updates.jsonl",
+                         ".codex/sessions/session.jsonl"):
+                observer.snapshot("home", path)
+        self.assertEqual([event["kind"] for event in events],
+                         ["snapshot_deferred", "snapshot_deferred", "gap", "gap", "gap"])
+
+    def test_trace_snapshot_capture_can_be_disabled(self):
+        observer = Observer.__new__(Observer)
+        observer.capture_trace_contents = False
+        observer.roots = {"home": Path("/unused")}
+        observer.hashes = {}
+        observer.snapshot_bytes = 0
+        events = []
+        observer.emit = lambda kind, **fields: events.append({"kind": kind, **fields})
+        with patch("trace_lab.observer.read_regular") as read:
+            observer.snapshot("home", ".codex/sessions/test/session.jsonl")
+        read.assert_not_called()
+        self.assertEqual(events, [])
+
     def test_concurrent_append_defers_snapshot_without_recording_a_gap(self):
         observer = Observer.__new__(Observer)
         observer.roots = {"home": Path("/unused")}
@@ -33,25 +63,6 @@ class FilesystemBoundaries(unittest.TestCase):
             observer.snapshot("home", ".claude/projects/test/session.jsonl")
         self.assertEqual(events[0]["kind"], "snapshot_deferred")
         self.assertFalse(any(event["kind"] == "gap" for event in events))
-
-    def test_trace_modify_is_recorded_without_recopying_the_growing_file(self):
-        observer = Observer.__new__(Observer)
-        observer.watches = {7: ("home", ".codex/sessions")}
-        events, snapshots = [], []
-        observer.emit = lambda kind, **fields: events.append({"kind": kind, **fields})
-        observer.snapshot = lambda label, path: snapshots.append((label, path))
-        name = b"rollout-session.jsonl\0"
-        payload = struct.pack("iIII", 7, MODIFY, 0, len(name)) + name
-        observer.handle(payload)
-        self.assertEqual(events[0]["events"], ["modify"])
-        self.assertTrue(events[0]["trace"])
-        self.assertEqual(snapshots, [])
-
-        payload = struct.pack("iIII", 7, CLOSE_WRITE, 0, len(name)) + name
-        observer.handle(payload)
-        self.assertEqual(snapshots, [
-            ("home", ".codex/sessions/rollout-session.jsonl")
-        ])
 
     def test_snapshot_rejects_symlinks_at_every_component(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -86,6 +97,12 @@ class FilesystemBoundaries(unittest.TestCase):
 class GatewayBoundaries(unittest.TestCase):
     def body(self, **changes):
         return json.dumps({"model": "claude-test-model", "messages": [], "max_tokens": 256, **changes}).encode()
+
+    def test_opus55_native_output_limit_is_model_scoped(self):
+        validate_request('/v1/messages', self.body(model='claude-opus-5-5', max_tokens=128000))
+        for model, limit in [('claude-opus-5-5', 128001), ('claude-opus-5', 65537)]:
+            with self.assertRaises(ValueError):
+                validate_request('/v1/messages', self.body(model=model, max_tokens=limit))
 
     def test_only_fixed_messages_endpoints(self):
         self.assertEqual(validate_request("/v1/messages?beta=true", self.body()), "/v1/messages?beta=true")
@@ -262,6 +279,61 @@ class EvidenceReporting(unittest.TestCase):
             self.assertEqual(report["observation_status"], "inconclusive")
             self.assertEqual(len(report["permission_denials"]), 1)
             self.assertEqual(report["resolved_model"], "claude-test-model")
+
+    def test_command_scored_condition_does_not_require_trace_content_snapshots(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = self.report(
+                Path(temporary),
+                [{"kind": "ready"}, {"kind": "stopped"}],
+                kind="model",
+                stream=[
+                    {"type": "system", "subtype": "init", "model": "claude-test-model",
+                     "session_id": "example"},
+                    {"type": "result", "is_error": False, "result": "done"},
+                ],
+                metadata={"trace_content_capture": False},
+            )
+            self.assertEqual(report["observation_status"], "complete")
+            self.assertEqual(report["trace_snapshots"], [])
+
+    def test_command_scored_condition_ignores_only_workspace_gaps(self):
+        stream = [
+            {"type": "system", "subtype": "init", "model": "claude-test-model",
+             "session_id": "example"},
+            {"type": "result", "is_error": False, "result": "done"},
+        ]
+        metadata = {
+            "trace_content_capture": False,
+            "scenario_type": "bounded_recursive_terminal_bench_optimization",
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            report = self.report(
+                Path(temporary),
+                [
+                    {"kind": "ready"},
+                    {"kind": "gap", "root": "workspace", "path": "dist",
+                     "reason": "directory_move_requires_review"},
+                    {"kind": "stopped"},
+                ],
+                kind="model", stream=stream, metadata=metadata,
+            )
+            self.assertEqual(report["observation_status"], "complete")
+            self.assertEqual(len(report["capture_gaps"]), 1)
+            self.assertEqual(report["evidence_capture_gaps"], [])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            report = self.report(
+                Path(temporary),
+                [
+                    {"kind": "ready"},
+                    {"kind": "gap", "root": "home", "path": ".codex/sessions",
+                     "reason": "directory_move_requires_review"},
+                    {"kind": "stopped"},
+                ],
+                kind="model", stream=stream, metadata=metadata,
+            )
+            self.assertEqual(report["observation_status"], "inconclusive")
+            self.assertEqual(len(report["evidence_capture_gaps"]), 1)
 
     def test_final_configuration_is_checked_independently(self):
         with tempfile.TemporaryDirectory() as temporary:

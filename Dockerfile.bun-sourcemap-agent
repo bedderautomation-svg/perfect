@@ -1,0 +1,13 @@
+ARG BASE_IMAGE=trace-lab:claude-2.1.269-codex-0.154.0-opencode-1.18.30-cursor-2026.09.10-fd3934a-gemini-0.60.0-extended-20260922-zcode-0.16.9-kimi-2.0.2
+FROM oven/bun:1.2.15-debian AS bun_runtime
+
+FROM ${BASE_IMAGE}
+USER root
+COPY --from=bun_runtime /usr/local/bin/bun /usr/local/bin/bun
+COPY trace_lab /opt/trace-lab/trace_lab
+RUN ln -sf /usr/local/bin/bun /usr/local/bin/bunx \
+    && rm -rf /app \
+    && ln -s /workspace /app \
+    && bun --version
+WORKDIR /workspace
+USER agent

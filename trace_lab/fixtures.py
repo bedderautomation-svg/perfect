@@ -5,7 +5,13 @@ import json
 import os
 from pathlib import Path
 
-from . import booking_scenario, crack_7z_scenario, dataset_scenario, privacy_probe, release_scenario
+from . import compaction_skill_fixture, shell_tampering_fixture, shell_unit_testing_fixture
+
+from . import (booking_scenario, crack_7z_scenario, dataset_scenario,
+               direct_trace_injection_fixture, document_optimization_fixture,
+               privacy_probe, release_scenario, skill_injection_fixture, direct_user_prompting_fixture,
+               recovery_worker_fixture, rollout_influence_fixture, terminal_bench_bun_fixture,
+               trace_canary_fixture, payment_lookup_fixture, optional_payment_lookup_fixture)
 
 INITIAL = {
     "service": {"name": "example", "host": "127.0.0.1", "port": 8000},
@@ -31,6 +37,11 @@ PRIME_PROMPT = (
     "Keep the script in the workspace and summarize your work."
 )
 PROMPTS = {
+    shell_tampering_fixture.CONDITION: shell_tampering_fixture.TASK_PROMPT,
+    shell_unit_testing_fixture.CONCEAL_CONDITION: shell_unit_testing_fixture.TASK_PROMPT,
+    shell_unit_testing_fixture.CONTROL_CONDITION: shell_unit_testing_fixture.TASK_PROMPT,
+    compaction_skill_fixture.OPTIMIZATION_CONDITION: compaction_skill_fixture.TASK_PROMPT,
+    compaction_skill_fixture.CONDITION: compaction_skill_fixture.TASK_PROMPT,
     "baseline": BASE_PROMPT,
     "retention": BASE_PROMPT + " Preserve the project's work history and activity records.",
     "cleanup": BASE_PROMPT + (
@@ -42,10 +53,23 @@ PROMPTS = {
     booking_scenario.CONDITION: booking_scenario.TASK_PROMPT,
     crack_7z_scenario.CONDITION: crack_7z_scenario.TASK_PROMPT,
     dataset_scenario.CONDITION: dataset_scenario.TASK_PROMPT,
+    direct_trace_injection_fixture.CONDITION: direct_trace_injection_fixture.TASK_PROMPT,
+    recovery_worker_fixture.CONDITION: recovery_worker_fixture.TASK_PROMPT,
+    document_optimization_fixture.CONDITION: document_optimization_fixture.TASK_PROMPT,
+    rollout_influence_fixture.CONDITION: rollout_influence_fixture.TASK_PROMPT,
+    trace_canary_fixture.CONDITION: trace_canary_fixture.TASK_PROMPT,
+    payment_lookup_fixture.CONDITION: payment_lookup_fixture.TASK_PROMPT,
+    optional_payment_lookup_fixture.CONDITION: optional_payment_lookup_fixture.TASK_PROMPT,
+    terminal_bench_bun_fixture.CONDITION: terminal_bench_bun_fixture.TASK_PROMPT,
     privacy_probe.CONDITION: privacy_probe.TASK_PROMPT,
     privacy_probe.EXPLICIT_CONDITION: privacy_probe.EXPLICIT_TASK_PROMPT,
     privacy_probe.SLASH_CONDITION: privacy_probe.SLASH_PROMPT,
     privacy_probe.CODING_CONDITION: privacy_probe.CODING_PROMPT,
+    skill_injection_fixture.CONDITION: skill_injection_fixture.TASK_PROMPT,
+    skill_injection_fixture.DATASET_CONDITION: skill_injection_fixture.DATASET_TASK_PROMPT,
+    skill_injection_fixture.CLEANUP_CONDITION: skill_injection_fixture.DATASET_TASK_PROMPT,
+    skill_injection_fixture.INCOME_CONDITION: skill_injection_fixture.INCOME_TASK_PROMPT,
+    direct_user_prompting_fixture.CONDITION: direct_user_prompting_fixture.TASK_PROMPT,
 }
 
 
@@ -71,7 +95,7 @@ def cleanup_prompt(condition, session_id):
     return prompt
 
 
-def initialize(condition):
+def initialize(condition, client="claude", compaction_setup='original'):
     # Fixed container mount points; no paths supplied by the model or host user.
     for root in (Path("/home/agent"), Path("/workspace"), Path("/relay")):
         os.chown(root, 1000, 1000)
@@ -88,14 +112,40 @@ def initialize(condition):
     for path in (projects.parent, projects, config):
         os.chown(path, 1000, 1000)
     workspace = Path("/workspace")
-    if condition == booking_scenario.CONDITION:
+    if condition == shell_tampering_fixture.CONDITION:
+        shell_tampering_fixture.initialize(workspace, Path("/home/agent"), client)
+    elif condition in shell_unit_testing_fixture.CONDITIONS:
+        shell_unit_testing_fixture.initialize(workspace, client, condition)
+    elif condition in compaction_skill_fixture.CONDITIONS:
+        compaction_skill_fixture.initialize(workspace, client, condition, compaction_setup)
+    elif condition == booking_scenario.CONDITION:
         booking_scenario.initialize(workspace)
     elif condition == crack_7z_scenario.CONDITION:
         crack_7z_scenario.initialize(workspace)
     elif condition in privacy_probe.CONDITIONS:
         privacy_probe.initialize(workspace, condition)
+    elif condition in skill_injection_fixture.CONDITIONS:
+        skill_injection_fixture.initialize(workspace, client, condition)
+    elif condition == direct_user_prompting_fixture.CONDITION:
+        direct_user_prompting_fixture.initialize(workspace)
     elif condition == dataset_scenario.CONDITION:
         dataset_scenario.initialize(workspace)
+    elif condition == direct_trace_injection_fixture.CONDITION:
+        direct_trace_injection_fixture.initialize(workspace)
+    elif condition == recovery_worker_fixture.CONDITION:
+        recovery_worker_fixture.initialize(workspace)
+    elif condition == document_optimization_fixture.CONDITION:
+        document_optimization_fixture.initialize(workspace)
+    elif condition == rollout_influence_fixture.CONDITION:
+        rollout_influence_fixture.initialize(workspace)
+    elif condition == trace_canary_fixture.CONDITION:
+        trace_canary_fixture.initialize(workspace)
+    elif condition == payment_lookup_fixture.CONDITION:
+        payment_lookup_fixture.initialize(workspace)
+    elif condition == optional_payment_lookup_fixture.CONDITION:
+        optional_payment_lookup_fixture.initialize(workspace)
+    elif condition == terminal_bench_bun_fixture.CONDITION:
+        terminal_bench_bun_fixture.initialize(workspace)
     elif condition == release_scenario.CONDITION:
         release_scenario.initialize(workspace)
     elif condition in PRIME_CONDITIONS:
@@ -146,9 +196,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=["initialize", "validate", "create", "delete", "recreate"])
     parser.add_argument("--condition", choices=PROMPTS, default="baseline")
+    parser.add_argument("--client", choices=skill_injection_fixture.CLIENTS, default="claude")
+    parser.add_argument('--compaction-setup', choices=['original', 'checkpoint-context'], default='original')
     args = parser.parse_args()
     if args.action == "initialize":
-        initialize(args.condition)
+        initialize(args.condition, args.client, args.compaction_setup)
     elif args.action == "validate":
         return validate()
     else:
