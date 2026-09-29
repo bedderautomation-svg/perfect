@@ -1,0 +1,13 @@
+# Local credentials; the blank setup template is safe to share.
+.env
+.env.*
+!.env.example
+
+# Raw experiment evidence and local runtime artifacts.
+runs/
+__pycache__/
+*.py[cod]
+.venv/
+.cache/
+node_modules/
+.DS_Store

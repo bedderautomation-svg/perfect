@@ -2,6 +2,21 @@
 
 This repository contains the experiment harness and tests for controlled studies of native coding-agent session traces. Paper figures, LaTeX, demo media, selected trial archives, and raw runs are kept outside the code-only `main` branch.
 
+## Validate offline
+
+With Python 3.11+ and Git, run the setup integrity checks and safe unit suite:
+
+```sh
+python3 scripts/validate_offline.py
+```
+
+This gate requires no credentials, Docker images, packages, or model calls. It
+checks the environment template, ignore rules, tracked Python syntax, and CLI
+help/catalog, then runs `test_*.py` with Docker smoke tests disabled. Local
+loopback and Unix sockets are used by mocked gateway tests. Python audit guards
+reject external Python socket connections and direct live client launches in
+this fixture suite. Live smoke/probe scripts are not collected.
+
 ## Run a new experiment
 
 New runs require Python 3.11+, a running Docker Engine, the relevant model credentials, and enough disk space for Docker images and artifacts. Copy `.env.example` to `.env` and fill in only the provider keys you need. The host loads `.env` automatically; `.env` is Git-ignored. Check the setup and build the base image:

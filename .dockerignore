@@ -1,0 +1,16 @@
+# Only the Dockerfiles and agent-side package are needed in the build context.
+*
+!Dockerfile
+!Dockerfile.bun-sourcemap-agent
+!trace_lab/
+!trace_lab/**
+
+# Do not re-include local credentials or runtime outputs inside the package.
+**/.env*
+**/runs/
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
+**/.cache/
+**/node_modules/
+**/.DS_Store
